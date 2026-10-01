@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# MPLAB X / XC-DSC (proyectos .X)
+# ---------------------------------------------------------------------------
+**/build/
+**/dist/
+**/.generated_files/
+**/nbproject/private/
+**/nbproject/Makefile-*.mk
+**/nbproject/Package-*.bash
+**/queuelogs/
+**/debug/
+**/disassembly/
+*.o
+*.o.d
+*.elf
+*.map
+*.cof
+*.hex
+*.mk.bak
+*.X/funclist
+*.X/MPLABXLog.xml*
+
+# Respaldos automáticos de MCC
+**/mcc-manifest-autosave.yml
+
+# ---------------------------------------------------------------------------
+# MATLAB / Simulink
+# ---------------------------------------------------------------------------
+slprj/
+*.slxc
+*.autosave
+*.asv
+*.mexa64
+*.mexmaci64
+*_grt_rtw/
+*_ert_rtw/
+*_rtwsfcn_rtw/
+codegen/
+sfprj/
+*.mat.bak
+
+# Los .mexw64, libmpsse.dll y msvcr120.dll se conservan a propósito:
+# permiten abrir los modelos en Windows sin recompilar las S-Functions.
+
+# ---------------------------------------------------------------------------
+# Sistema / editores
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
+.vscode/
+.idea/
+.cache/
+compile_commands.json

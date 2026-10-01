@@ -64,7 +64,7 @@ DWORD channel;
 DWORD channels;
 FT_STATUS status;
     
-    // Configuración para leer del dsPIC
+    // Configuraciï¿½n para leer del dsPIC
     channelConf.ClockRate = 1000000;
     channelConf.LatencyTimer = 1;
     channelConf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 | SPI_CONFIG_OPTION_CS_ACTIVELOW;
@@ -121,7 +121,7 @@ if (Started == 1)
     //WRITE PIC    
     double voltaje = u0[0];
         if (voltaje > 2.5) {
-            voltaje = 2.5; // Límite máximo
+            voltaje = 2.5; // Lï¿½mite mï¿½ximo
         }else if (voltaje < -2.5){
             voltaje = -2.5; //Limite minimo
         }

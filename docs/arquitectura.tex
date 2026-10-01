@@ -4,26 +4,26 @@
 \documentclass[border=8pt]{standalone}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage[scaled=0.92]{helvet}
-\renewcommand{\familydefault}{\sfdefault}
+\usepackage{lmodern}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, fit, backgrounds, calc, shapes.geometric}
 
-\definecolor{pcfill}{HTML}{E8F0FE}  \definecolor{pcline}{HTML}{4A6FB5}
-\definecolor{ftfill}{HTML}{E6F4EA}  \definecolor{ftline}{HTML}{3C8D5A}
-\definecolor{mcufill}{HTML}{FFF3E0} \definecolor{mculine}{HTML}{C77C1E}
-\definecolor{plfill}{HTML}{F3F3F3}  \definecolor{plline}{HTML}{777777}
+% Paleta sobria en escala de grises
+\definecolor{pcfill}{gray}{0.97}  \definecolor{pcline}{gray}{0.25}
+\definecolor{ftfill}{gray}{0.93}  \definecolor{ftline}{gray}{0.25}
+\definecolor{mcufill}{gray}{0.97} \definecolor{mculine}{gray}{0.25}
+\definecolor{plfill}{gray}{1.00}  \definecolor{plline}{gray}{0.25}
 
 \tikzset{
-  box/.style   = {draw, rounded corners=3pt, thick, align=center,
+  box/.style   = {draw, rounded corners=1.5pt, semithick, align=center,
                   minimum height=1.1cm, minimum width=2.6cm, font=\footnotesize},
   pc/.style    = {box, fill=pcfill, draw=pcline},
   ft/.style    = {box, fill=ftfill, draw=ftline},
   mcu/.style   = {box, fill=mcufill, draw=mculine},
   pl/.style    = {box, fill=plfill, draw=plline},
-  tbd/.style   = {pl, dashed, text=black!60},
-  grp/.style   = {draw, rounded corners=6pt, thick, inner sep=10pt},
-  gtitle/.style= {font=\small\bfseries},
+  tbd/.style   = {pl, dashed},
+  grp/.style   = {draw, rounded corners=2pt, thin, inner sep=10pt},
+  gtitle/.style= {font=\small\scshape},
   pin/.style   = {font=\scriptsize\ttfamily, inner sep=2pt, text=black!75},
   sig/.style   = {-{Stealth[length=2.2mm]}, thick},
   dsig/.style  = {{Stealth[length=2.2mm]}-{Stealth[length=2.2mm]}, very thick},
@@ -56,7 +56,7 @@
 \draw[sig, dashed] (h.north) -- node[labr] {compartido} (h |- lib.south);
 
 \begin{scope}[on background layer]
-  \node[grp, draw=pcline, fill=pcfill!35, fit=(mod)(esc)(lee)(lib)(init)(h)] (gpc) {};
+  \node[grp, draw=pcline, fill=white, fit=(mod)(esc)(lee)(lib)(init)(h)] (gpc) {};
 \end{scope}
 \node[gtitle, anchor=south] at (gpc.north) {PC · Windows + MATLAB/Simulink};
 
@@ -69,7 +69,7 @@
   \node[pin, anchor=east] at ($(ft.east)+(0,\dy)$) {\p};
 
 \begin{scope}[on background layer]
-  \node[grp, draw=ftline, fill=ftfill!35, fit=(ft)] (gft) {};
+  \node[grp, draw=ftline, fill=white, fit=(ft)] (gft) {};
 \end{scope}
 \node[gtitle, anchor=south] at (gft.north) {FT2232H · canal A};
 
@@ -102,7 +102,7 @@
 \draw[sig] (loop.east) -- node[lab, align=center] {cmd \texttt{0x10}\\+ 16 bits} (loop.east -| spi2.west);
 
 \begin{scope}[on background layer]
-  \node[grp, draw=mculine, fill=mcufill!35, fit=(spi1)(loop)(qei)(spi2)] (gpic) {};
+  \node[grp, draw=mculine, fill=white, fit=(spi1)(loop)(qei)(spi2)] (gpic) {};
 \end{scope}
 \node[gtitle, anchor=south] at (gpic.north)
   {dsPIC33CK64MC105 · Curiosity Nano · $F_{cy}$ = 4 MHz};
@@ -129,7 +129,7 @@
 \draw[thick, dashed] (mot.south) -- node[labr] {eje} (enc.north);
 
 \begin{scope}[on background layer]
-  \node[grp, draw=plline, fill=plfill!45, fit=(dac)(amp)(mot)(enc)] (gpl) {};
+  \node[grp, draw=plline, fill=white, fit=(dac)(amp)(mot)(enc)] (gpl) {};
 \end{scope}
 \node[gtitle, anchor=south] at (gpl.north) {Planta};
 

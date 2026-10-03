@@ -88,7 +88,8 @@ El firmware se desarrolló en MPLAB X con MCC y el compilador XC-DSC (o XC16),
 usando el pack `dsPIC33CK-MC_DFP`. Se mantienen tres variantes: una que sólo
 transmite la posición del encoder, otra que sólo recibe y escribe al DAC, y
 `dsPicController`, que integra ambas funciones y es la que se utiliza en
-operación normal.
+operación normal. `dsPicDaq` implementa el protocolo nuevo descrito en
+[Trabajo en curso](#trabajo-en-curso) y se encuentra en validación.
 
 La tarjeta se programa con el depurador integrado de la Curiosity Nano o
 copiando el archivo `.hex` a la unidad USB `CURIOSITY` que aparece al
@@ -150,10 +151,85 @@ permanece energizado.
 
 ## Trabajo en curso
 
-Se propone sustituir el protocolo actual por una única transferencia
-full-duplex de ocho bytes por paso de simulación (`SPI_ReadWrite`), delimitada
-por `CS` y protegida con número de secuencia y CRC-8. En el dsPIC, SPI1 se
-atenderá mediante DMA, y la interrupción asociada al flanco de subida de `CS`
-procesará la trama recibida y preparará la respuesta siguiente. El análisis
-completo, el formato de trama y el plan de validación se encuentran en
-[`docs/propuesta.pdf`](docs/propuesta.pdf).
+Se sustituye el protocolo actual por una única transferencia full-duplex de
+ocho bytes por paso de simulación (`SPI_ReadWrite`), delimitada por `CS` y
+protegida con número de secuencia y CRC-8. El análisis, el formato de trama y
+el plan de validación se encuentran en [`docs/propuesta.pdf`](docs/propuesta.pdf).
+
+| Etapa | Estado |
+|---|---|
+| 1. Firmware `dsPicDaq` | Implementado; compila sin advertencias con XC-DSC v4.00. Pendiente de validar en la tarjeta |
+| 2. Programa de prueba en la PC | Implementado (`herramientas/prueba_enlace`). Pendiente de ejecutar con el hardware |
+| 3. Bloque de Simulink | Implementado (`SIMULINK/DaqPic`). Pendiente de compilar y ejecutar en MATLAB |
+| 4. Pruebas con el motor | Pendiente |
+
+El procedimiento de prueba en la tarjeta se describe en [`PRUEBAS.md`](PRUEBAS.md).
+Se incluyen el firmware compilado (`MPLAB/dsPicDaq.hex`) y el programa de
+prueba compilado para Windows de 64 bits.
+
+El formato de trama está definido en un solo lugar,
+[`protocolo/daq_protocolo.h`](protocolo/daq_protocolo.h), que comparten el
+firmware y el software de la PC. Sus pruebas (`protocolo/prueba_protocolo.c`)
+se ejecutan sin hardware e incluyen un modelo del esclavo que reproduce el
+retardo de una trama en la respuesta.
+
+### Firmware `dsPicDaq`
+
+SPI1 opera como esclavo en modo de buffer estándar. Dos canales DMA mueven los
+datos entre SPI1 y la RAM durante la transferencia: DMA0 recibe, disparado por
+el evento de buffer de recepción lleno (`CHSEL = 0x02`), y DMA1 transmite,
+disparado por el evento de buffer de transmisión vacío (`CHSEL = 0x03`). La
+FIFO del modo mejorado no se utiliza porque en este dispositivo tiene cuatro
+niveles en 8 bits, insuficientes para una trama completa.
+
+`CS` (RB10) se asigna mediante PPS tanto a `SS1` como a `INT1`. La interrupción
+del flanco de subida valida la trama, reinicia SPI1 (lo que vacía los buffers y
+borra `SPIROV`), muestrea el QEI, construye la respuesta siguiente y vuelve a
+programar el DMA. El lazo principal sólo escribe al DAC8554 cuando el valor
+cambia. La terminal RD10 (LED0) permanece en alto durante la interrupción, lo
+que permite medir su duración con un analizador lógico. Timer1 actúa como temporizador de vigilancia: si transcurren 50 ms sin
+una trama válida, el DAC se lleva a 0 V y se reporta en el byte `status`.
+
+El proyecto se compila con optimización `-O1` para acortar la interrupción de
+fin de trama, que determina el intervalo mínimo entre tramas.
+
+Antes de integrarlo con Simulink deben verificarse en la tarjeta, con el
+programa de prueba y un analizador lógico:
+
+- que el canal de transmisión entregue los ocho bytes sin repeticiones ni
+  omisiones, en particular el segundo byte, cuyo disparo depende de si el
+  evento del SPI se detecta por flanco o por nivel;
+- la duración de la interrupción de fin de trama, medida entre el flanco de
+  subida de `CS` y el término de la rutina;
+- la ausencia de errores en al menos 100 000 tramas consecutivas.
+
+### Programa de prueba
+
+`herramientas/prueba_enlace` envía tramas sin Simulink y contabiliza los
+errores de encabezado, CRC y número de secuencia, así como los que reporta el
+dsPIC. Mide también la duración de cada transferencia. Por omisión la salida
+analógica permanece en 0 V; la opción `-salida` genera una rampa de ±1 V para
+verificarla con osciloscopio. Las instrucciones de compilación se encuentran
+en el encabezado del archivo.
+
+### Bloque de Simulink
+
+`SIMULINK/DaqPic` contiene la S-Function `daqPic`, que sustituye a
+`initializePic`, `leerPic` y `escribirPic`. El bloque abre el FT2232H, ejecuta
+una transferencia por paso y, al terminar la simulación, deja la salida en
+0 V. Al iniciar verifica que el dsPIC responda con el protocolo nuevo.
+
+| Puerto | Señal |
+|---|---|
+| Entrada | Voltaje de salida [V], saturado a ±2.5 V |
+| Salida 1 | Posición del encoder [cuentas], relativa al inicio de la simulación |
+| Salida 2 | Errores de comunicación acumulados |
+| Salida 3 | Pasos atrasados respecto al tiempo real |
+
+Sus parámetros son el periodo de muestreo y la sincronización con el reloj de
+la PC. La transferencia se realiza en la actualización del bloque, con el
+voltaje del paso actual, y la posición recibida se entrega en el paso
+siguiente. Así el bloque no tiene transmisión directa y puede emplearse en
+lazo cerrado sin generar lazos algebraicos; el retardo total del lazo es de
+dos periodos. `compilar.m` genera el archivo MEX y `crear_modelo.m` construye
+un modelo de prueba.

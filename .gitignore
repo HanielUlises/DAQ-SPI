@@ -16,6 +16,7 @@
 *.map
 *.cof
 *.hex
+!MPLAB/dsPicDaq.hex
 *.mk.bak
 *.X/funclist
 *.X/MPLABXLog.xml*
@@ -41,6 +42,14 @@ sfprj/
 
 # Los .mexw64, libmpsse.dll y msvcr120.dll se conservan a propósito:
 # permiten abrir los modelos en Windows sin recompilar las S-Functions.
+
+# ---------------------------------------------------------------------------
+# Herramientas de la PC (compilación con MSVC)
+# ---------------------------------------------------------------------------
+# prueba_enlace.exe y sus DLL se conservan a propósito: permiten ejecutar la
+# prueba en Windows sin Visual Studio.
+herramientas/**/*.obj
+herramientas/**/*.pdb
 
 # ---------------------------------------------------------------------------
 # Sistema / editores

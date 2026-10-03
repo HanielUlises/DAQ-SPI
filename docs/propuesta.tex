@@ -229,8 +229,9 @@ Byte & \multicolumn{2}{l|}{PC $\to$ dsPIC (MOSI)} & \multicolumn{2}{l}{dsPIC $\t
 El byte \code{flags} contiene, en su bit~0, la habilitación de la salida
 analógica (con valor cero el DAC se lleva a 0\,V) y, en su bit~1, la orden de
 poner en cero el contador del encoder. El byte \code{status} indica en sus
-bits~0, 1 y~2, respectivamente, si la última trama recibida tuvo error de CRC,
-si tuvo un encabezado inválido y si se activó el temporizador de vigilancia.
+bits~0, 1, 2 y~3, respectivamente, si la última trama recibida tuvo error de
+CRC, si tuvo un encabezado inválido, si se activó el temporizador de vigilancia
+y si la trama no tuvo exactamente ocho bytes.
 
 \subsection{Temporización}
 

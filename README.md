@@ -1,56 +1,29 @@
 # DAQ-SPI
 
-Emulación de una tarjeta de adquisición de datos tipo **Quanser** con un
-**dsPIC33CK64MC105** (Curiosity Nano), controlada en tiempo real desde
-**Simulink** a través de un puente USB–SPI **FT2232H**.
-
+Tarjeta de adquisición de datos de bajo costo, funcionalmente equivalente a
+una tarjeta tipo Quanser, basada en el microcontrolador dsPIC33CK64MC105
+(Curiosity Nano). El sistema se controla en tiempo real desde Simulink mediante
+un puente USB–SPI FT2232H y ofrece una salida analógica de ±2.5 V y la lectura
+de un encoder en cuadratura.
 
 ## Arquitectura
 
 ![Arquitectura del sistema](docs/arquitectura.png)
 
-Fuente en TikZ: [`docs/arquitectura.tex`](docs/arquitectura.tex) (PDF: [`docs/arquitectura.pdf`](docs/arquitectura.pdf)).
+En la PC, el modelo de Simulink invoca S-Functions en C++ que utilizan la
+biblioteca libMPSSE-SPI de FTDI para operar el FT2232H como maestro SPI. El
+dsPIC actúa como esclavo de este bus: recibe el valor que debe escribirse en el
+DAC y devuelve la posición del encoder. Internamente, el dsPIC emplea tres
+periféricos:
 
-- **PC:** Simulink llama a S-Functions en C/C++ que usan la biblioteca
-  `libMPSSE-SPI` de FTDI para hablar con el FT2232H.
-- **FT2232H:** maestro SPI a 1 MHz, modo 0, `CS` en `DBUS3`, activo en bajo,
-  latency timer de 1 ms.
-- **dsPIC:**
-  - **SPI1 (esclavo):** recibe del FT2232H el valor para el DAC y le regresa
-    la posición del encoder.
-  - **SPI2 (maestro):** escribe el valor recibido al DAC de 16 bits.
-  - **QEI1:** cuenta los pulsos del encoder del motor.
-
-## Estructura del repositorio
-
-```
-DAQ-SPI/
-├── MPLAB/                      Firmware del dsPIC (proyectos MPLAB X + MCC)
-│   ├── dsPicReadEncoder.X/     Solo lectura del encoder → SPI1
-│   ├── dsPicWriteEncoder.X/    Solo escritura SPI1 → DAC por SPI2
-│   └── dsPicController.X/      Ambos combinados en un solo firmware
-├── SIMULINK/                   Modelos y S-Functions para Windows
-│   ├── ReadPic/                Lectura del encoder (versión original)
-│   ├── WritePic/               Escritura al DAC (versión original)
-│   ├── ReadPicModificado/      leerPic: lectura con handle compartido
-│   ├── WritePicModificado/     initializePic + escribirPic: handle compartido
-│   └── MergedPic/              Lectura y escritura en una sola S-Function
-├── DRIVER FTDI/                Driver CDM de FTDI para Windows (v2.12.36.4)
-└── docs/                       Diagrama de arquitectura (TikZ, PDF, PNG)
-```
-
-### S-Functions con handle compartido (`*Modificado/`)
-
-Las versiones modificadas separan la apertura del FT2232H de las transferencias:
-
-| S-Function | Función |
+| Periférico | Función |
 |---|---|
-| `initializePic` | Abre el canal SPI del FT2232H y saca como señal un apuntador (`uint64`) a la estructura `HandleFTDI` |
-| `leerPic` | Recibe el handle, lee 12 bytes por SPI y busca la trama del encoder (`0xAA 0x55` + 4 bytes) |
-| `escribirPic` | Recibe el handle y un voltaje en ±2.5 V, y lo envía como trama `0xAA` + 16 bits |
+| SPI1 (esclavo) | Enlace con el FT2232H |
+| SPI2 (maestro) | Escritura al DAC de 16 bits |
+| QEI1 | Conteo de pulsos del encoder del motor |
 
-`HandleFTDI` (en `ftdi_compartido.h`) incluye un mutex de Windows para que las
-lecturas y escrituras no usen el FT2232H al mismo tiempo.
+El reloj del microcontrolador proviene del oscilador interno FRC de 8 MHz, sin
+PLL (F<sub>osc</sub> = 8 MHz, F<sub>cy</sub> = 4 MHz).
 
 ## Conexiones
 
@@ -66,79 +39,107 @@ lecturas y escrituras no usen el FT2232H al mismo tiempo.
 | QEI A / B | RB8 / RB9 | | |
 | LED0 | RD10 | | |
 
-Reloj del dsPIC: FRC interno de 8 MHz sin PLL (Fosc = 8 MHz, Fcy = 4 MHz).
+## Protocolo de comunicación
 
-## Protocolo SPI actual
+El FT2232H opera a 1 MHz en modo SPI 0, con `CS` activo en bajo en `DBUS3` y
+un *latency timer* de 1 ms. En la versión actual, la escritura y la lectura se
+realizan como transacciones independientes.
 
-**Escritura (PC → dsPIC):** 3 bytes por transferencia.
+### Escritura (PC → dsPIC)
 
-| Byte | Contenido |
-|---|---|
-| 0 | `0xAA` (encabezado) |
-| 1 | Valor DAC, parte alta |
-| 2 | Valor DAC, parte baja |
-
-El voltaje se convierte como `valor = 13107 · (V + 2.5)`, es decir
-−2.5 V → 0, 0 V → 32767 y +2.5 V → 65535. El dsPIC lo reenvía al DAC con
-el byte de comando `0x10` seguido de los 16 bits.
-
-**Lectura (dsPIC → PC):** la PC lee 12 bytes y busca la secuencia:
+Cada transacción consta de tres bytes:
 
 | Byte | Contenido |
 |---|---|
-| 0–1 | `0xAA 0x55` (encabezado) |
-| 2–5 | Posición del QEI, `int32` little-endian |
+| 0 | Encabezado `0xAA` |
+| 1 | Valor del DAC, byte alto |
+| 2 | Valor del DAC, byte bajo |
 
-## Compilación
+El voltaje solicitado se convierte según `valor = 13107 · (V + 2.5)`, de modo
+que −2.5 V, 0 V y +2.5 V corresponden a 0, 32767 y 65535, respectivamente. El
+dsPIC retransmite el valor al DAC precedido del byte de comando `0x10`.
 
-### Firmware
+### Lectura (dsPIC → PC)
 
-Abrir el proyecto `.X` en **MPLAB X** con el compilador **XC-DSC** (o XC16) y
-el pack `dsPIC33CK-MC_DFP`, y programar la Curiosity Nano con su depurador
-integrado. Otra opción es copiar el `.hex` generado al disco USB `CURIOSITY`
-que aparece al conectar la tarjeta.
+La PC lee doce bytes y localiza en ellos la secuencia siguiente:
 
-### S-Functions
+| Byte | Contenido |
+|---|---|
+| 0–1 | Encabezado `0xAA 0x55` |
+| 2–5 | Posición del QEI, `int32` *little-endian* |
 
-Los `.mexw64` ya compilados vienen incluidos para Windows de 64 bits. Para
-recompilar, desde MATLAB en la carpeta del modelo (ejemplo; ajustar rutas de `libmpsse`):
+## Firmware
+
+El firmware se desarrolló en MPLAB X con MCC y el compilador XC-DSC (o XC16),
+usando el pack `dsPIC33CK-MC_DFP`. Se mantienen tres variantes: una que sólo
+transmite la posición del encoder, otra que sólo recibe y escribe al DAC, y
+`dsPicController`, que integra ambas funciones y es la que se utiliza en
+operación normal.
+
+La tarjeta se programa con el depurador integrado de la Curiosity Nano o
+copiando el archivo `.hex` a la unidad USB `CURIOSITY` que aparece al
+conectarla.
+
+## Software en la PC
+
+El acceso al FT2232H se divide en tres S-Functions que comparten un mismo
+*handle*:
+
+| S-Function | Función |
+|---|---|
+| `initializePic` | Abre el canal SPI y entrega como señal (`uint64`) un apuntador a la estructura `HandleFTDI` |
+| `escribirPic` | Recibe un voltaje en el intervalo ±2.5 V y lo transmite al dsPIC |
+| `leerPic` | Obtiene la posición del encoder |
+
+`HandleFTDI` incluye un mutex del sistema operativo que impide el acceso
+simultáneo al dispositivo desde distintos bloques.
+
+Se incluyen los binarios `.mexw64` para Windows de 64 bits. Para recompilarlos
+se ejecuta, desde MATLAB y en el directorio del modelo, una instrucción de la
+forma:
 
 ```matlab
 mex escribirPic.cpp libmpsse.lib
 ```
 
-`libmpsse.dll` y `msvcr120.dll` deben estar en la misma carpeta que el modelo.
-En Windows hay que instalar el driver de `DRIVER FTDI/`.
+Las bibliotecas `libmpsse.dll` y `msvcr120.dll` deben encontrarse en el mismo
+directorio que el modelo, y es necesario instalar el driver CDM de FTDI
+(v2.12.36.4) incluido en el repositorio.
 
-## Problemas conocidos
+## Limitaciones conocidas
 
-Cuando lectura y escritura se usan al mismo tiempo (`dsPicController` +
-`leerPic`/`escribirPic`), la comunicación se corrompe. Causas identificadas en
-el código:
+Cuando la lectura y la escritura operan simultáneamente, la comunicación se
+corrompe. El análisis del firmware y del uso del bus identifica las causas
+siguientes:
 
-1. **SPI es full-duplex, pero se usa como half-duplex.** La PC hace un
-   `SPI_Write` y un `SPI_Read` por separado. Durante el `SPI_Write`, el dsPIC
-   también saca bytes por MISO y gasta datos de encoder que la PC nunca lee.
-   Durante el `SPI_Read`, la PC manda bytes de relleno que el dsPIC recibe
-   como si fueran datos.
-2. **El esclavo llena su FIFO de transmisión sin control.** `lecturaEncoder()`
-   escribe 6 bytes cada vez que hay espacio, sin saber cuándo leerá la PC. La
-   PC recibe valores viejos y desalineados, y por eso tiene que buscar el
-   encabezado dentro de 12 bytes.
-3. **Escrituras bloqueantes en el lazo principal.** `SPI1_ByteWrite()` se queda
-   esperando mientras la FIFO esté llena, y eso solo cambia cuando la PC manda
-   reloj. Mientras tanto, `escrituraDac()` no atiende la recepción.
-4. **Desbordamiento de recepción.** Si la FIFO de recepción se llena (por el
-   punto 3 o por los `printf`), se activa `SPIROV`. El driver de MCC nunca lo
-   limpia, así que el dsPIC deja de recibir.
-5. **No hay delimitación de tramas por `CS`.** El dsPIC no usa el flanco de
-   `SS1` para saber dónde empieza una trama. Solo busca el byte `0xAA`, que
-   también puede aparecer dentro de los datos.
+1. **Uso half-duplex de un bus full-duplex.** La PC ejecuta `SPI_Write` y
+   `SPI_Read` por separado. Durante la escritura, el dsPIC desplaza por MISO
+   datos del encoder que la PC descarta; durante la lectura, la PC envía bytes
+   de relleno que el dsPIC interpreta como datos.
+2. **Respuesta sin sincronía con el maestro.** El esclavo escribe la posición
+   en la FIFO de transmisión cada vez que hay espacio, sin relación con el
+   momento en que la PC lee. Los datos llegan desfasados y desalineados.
+3. **Espera activa en el lazo principal.** La escritura en SPI1 bloquea
+   mientras la FIFO de transmisión esté llena, condición que sólo cambia cuando
+   el maestro genera reloj. Durante ese tiempo no se atiende la recepción.
+4. **Desbordamiento sin recuperación.** Si la FIFO de recepción se llena, se
+   activa `SPIROV`; el driver generado por MCC no limpia la bandera y el módulo
+   deja de recibir.
+5. **Falta de delimitación de tramas.** El dsPIC no utiliza `CS` para
+   identificar el inicio de cada trama y se limita a buscar `0xAA`, valor que
+   puede aparecer dentro de los datos.
 
-El mutex del lado de la PC evita que dos S-Functions usen el FT2232H al mismo
-tiempo, pero no resuelve los puntos anteriores, que ocurren en el dsPIC.
+El mutex de la PC evita el acceso concurrente al FT2232H, pero no interviene en
+ninguno de estos fenómenos. Adicionalmente, al terminar la simulación se envía
+el valor `0x0000`, que corresponde a −2.5 V y no a 0 V, por lo que el motor
+permanece energizado.
 
-**Solución propuesta:** una sola transferencia full-duplex de longitud fija por
-paso de Simulink (`SPI_ReadWrite`). En el dsPIC, SPI1 con DMA y buffers dobles
-que se intercambian en el flanco de subida de `CS`, más un número de secuencia
-y un CRC en cada trama.
+## Trabajo en curso
+
+Se propone sustituir el protocolo actual por una única transferencia
+full-duplex de ocho bytes por paso de simulación (`SPI_ReadWrite`), delimitada
+por `CS` y protegida con número de secuencia y CRC-8. En el dsPIC, SPI1 se
+atenderá mediante DMA, y la interrupción asociada al flanco de subida de `CS`
+procesará la trama recibida y preparará la respuesta siguiente. El análisis
+completo, el formato de trama y el plan de validación se encuentran en
+[`docs/propuesta.pdf`](docs/propuesta.pdf).

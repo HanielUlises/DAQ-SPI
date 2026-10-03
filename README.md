@@ -19,15 +19,29 @@ periféricos:
 | Periférico | Función |
 |---|---|
 | SPI1 (esclavo) | Enlace con el FT2232H |
-| SPI2 (maestro) | Escritura al DAC de 16 bits |
+| SPI2 (maestro) | Escritura al DAC8554 |
 | QEI1 | Conteo de pulsos del encoder del motor |
 
 El reloj del microcontrolador proviene del oscilador interno FRC de 8 MHz, sin
 PLL (F<sub>osc</sub> = 8 MHz, F<sub>cy</sub> = 4 MHz).
 
+### Convertidor digital-analógico
+
+La salida analógica la genera un DAC8554 de Texas Instruments, convertidor de
+cuatro canales y 16 bits con interfaz serial, en encapsulado TSSOP-16 montado
+sobre un adaptador a DIP PA0017C de Proto-Advantage (SSOP-16, paso de 0.65 mm). El dsPIC actúa como maestro de este dispositivo
+a través de SPI2, que es un enlace unidireccional: sólo se utilizan las líneas
+de reloj (`SCLK`), datos (`DIN`) y sincronía (`SYNC`).
+
+Cada actualización consiste en una trama de 24 bits enmarcada por `SYNC` en
+nivel bajo: un byte de control seguido del código de 16 bits recibido desde la
+PC. El byte de control `0x10` selecciona la dirección 0 (`A1 = A0 = 0`), el
+canal A y el modo de actualización inmediata de un solo canal, por lo que la
+salida utilizada es `VOUTA`. Los canales B, C y D no se emplean.
+
 ## Conexiones
 
-| Señal | dsPIC | FT2232H | DAC |
+| Señal | dsPIC | FT2232H | DAC8554 |
 |---|---|---|---|
 | SCK1 (entrada) | RB13 | AD0 (SCK) | |
 | SDI1 | RB14 | AD1 (MOSI) | |

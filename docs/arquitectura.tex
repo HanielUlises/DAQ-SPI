@@ -116,15 +116,15 @@
 % =========================================================================
 % Planta
 % =========================================================================
-\node[pl, minimum height=2.6cm, minimum width=2.4cm] (dac) at (28.0,2.2)
-  {\textbf{DAC}\\16 bits};
+\node[pl, minimum height=2.6cm, minimum width=3.9cm] (dac) at (28.0,2.2)
+  {\textbf{DAC8554}\\16 bits · 4 canales\\{\scriptsize TSSOP-16 en PA0017C}};
 \foreach \dy/\p in {0.8/10, 0/11, -0.8/9}
   \node[pin, anchor=west] at ($(dac.west)+(0,\dy)$) {\p};
 \node[tbd] (amp) at (28.0,-0.3) {Etapa de potencia\\(por confirmar)};
 \node[pl]  (mot) at (28.0,-2.0) {\textbf{Motor DC}};
 \node[pl]  (enc) at (28.0,-3.7) {\textbf{Encoder}\\incremental};
 
-\draw[sig] (dac.south) -- node[labr] {$V_{out}$} (amp.north);
+\draw[sig] (dac.south) -- node[labr] {\texttt{VOUTA} (pin 1)} (amp.north);
 \draw[sig] (amp.south) -- (mot.north);
 \draw[thick, dashed] (mot.south) -- node[labr] {eje} (enc.north);
 

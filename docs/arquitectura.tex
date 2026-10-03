@@ -78,7 +78,9 @@
 % =========================================================================
 % dsPIC33CK64MC105
 % =========================================================================
-\node[mcu, minimum height=3.4cm, minimum width=2.8cm] (spi1) at (13.6,2.2)
+\node[mcu, minimum height=3.4cm, minimum width=3.0cm] (spi1) at (13.7,2.2) {};
+% Texto desplazado a la derecha para no encimarse con las etiquetas de pines
+\node[align=center, font=\footnotesize] at ($(spi1.center)+(0.35,0)$)
   {\textbf{SPI1}\\esclavo\\FIFO TX/RX};
 \foreach \dy/\p in {1.2/RB13, 0.4/RB14, -0.4/RB11, -1.2/RB10}
   \node[pin, anchor=west] at ($(spi1.west)+(0,\dy)$) {\p};
@@ -116,13 +118,13 @@
 % =========================================================================
 % Planta
 % =========================================================================
-\node[pl, minimum height=2.6cm, minimum width=3.9cm] (dac) at (28.0,2.2)
+\node[pl, minimum height=2.6cm, minimum width=3.9cm] (dac) at (28.6,2.2)
   {\textbf{DAC8554}\\16 bits · 4 canales\\{\scriptsize TSSOP-16 en PA0017C}};
 \foreach \dy/\p in {0.8/10, 0/11, -0.8/9}
   \node[pin, anchor=west] at ($(dac.west)+(0,\dy)$) {\p};
-\node[tbd] (amp) at (28.0,-0.3) {Etapa de potencia\\(por confirmar)};
-\node[pl]  (mot) at (28.0,-2.0) {\textbf{Motor DC}};
-\node[pl]  (enc) at (28.0,-3.7) {\textbf{Encoder}\\incremental};
+\node[tbd] (amp) at (28.6,-0.3) {Etapa de potencia\\(por confirmar)};
+\node[pl]  (mot) at (28.6,-2.0) {\textbf{Motor DC}};
+\node[pl]  (enc) at (28.6,-3.7) {\textbf{Encoder}\\incremental};
 
 \draw[sig] (dac.south) -- node[labr] {\texttt{VOUTA} (pin 1)} (amp.north);
 \draw[sig] (amp.south) -- (mot.north);

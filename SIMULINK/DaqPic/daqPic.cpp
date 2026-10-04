@@ -238,11 +238,7 @@ static void mdlUpdate(SimStruct *S, int_T tid)
     }
     e->paso++;
 
-    double v = *ssGetInputPortRealSignal(S, 0);
-    if (!(v == v)) v = 0.0;                     /* NaN */
-    if (v > DAQ_V_MAX) v = DAQ_V_MAX;
-    if (v < -DAQ_V_MAX) v = -DAQ_V_MAX;
-    const uint16_t dac = (uint16_t)(DAQ_DAC_ESCALA * (v + DAQ_V_MAX));
+    const uint16_t dac = daq_voltaje_a_dac(*ssGetInputPortRealSignal(S, 0));
 
     uint8_t status = 0;
     if (!transferir(e, dac, DAQ_FLAG_SALIDA_HAB, &status) || (status & kStatusErrores)) {

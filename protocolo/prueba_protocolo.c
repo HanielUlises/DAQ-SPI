@@ -111,6 +111,21 @@ static void prueba_trama_pc(void)
     VERIFICA(t[DAQ_PC_CRC] == daq_crc8(t, 7u));
 }
 
+static void prueba_voltaje(void)
+{
+    const double nan = 0.0 / 0.0;
+
+    VERIFICA(daq_voltaje_a_dac(-2.5) == 0u);
+    VERIFICA(daq_voltaje_a_dac(0.0) == DAQ_DAC_CERO);
+    VERIFICA(daq_voltaje_a_dac(2.5) == 65535u);
+    VERIFICA(daq_voltaje_a_dac(1.0) == 45874u);
+
+    /* Saturación y NaN */
+    VERIFICA(daq_voltaje_a_dac(-10.0) == 0u);
+    VERIFICA(daq_voltaje_a_dac(10.0) == 65535u);
+    VERIFICA(daq_voltaje_a_dac(nan) == DAQ_DAC_CERO);
+}
+
 static void prueba_trama_pic(void)
 {
     struct esclavo e;
@@ -208,6 +223,7 @@ int main(void)
 {
     prueba_crc();
     prueba_trama_pc();
+    prueba_voltaje();
     prueba_trama_pic();
     prueba_secuencia();
 

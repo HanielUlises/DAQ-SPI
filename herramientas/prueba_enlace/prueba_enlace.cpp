@@ -67,7 +67,7 @@ static uint16_t rampa(unsigned long k)
     double fase = (double)(k % 2000u) / 2000.0;
     double v = (fase < 0.5) ? (-amplitud + 4.0 * amplitud * fase)
                             : (3.0 * amplitud - 4.0 * amplitud * fase);
-    return (uint16_t)(DAQ_DAC_ESCALA * (v + DAQ_V_MAX));
+    return daq_voltaje_a_dac(v);
 }
 
 /* Generador pseudoaleatorio (xorshift) para variar el campo del DAC */

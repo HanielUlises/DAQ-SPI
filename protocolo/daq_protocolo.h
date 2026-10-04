@@ -100,6 +100,22 @@ static inline uint8_t daq_crc8(const uint8_t *datos, uint8_t n)
     return crc;
 }
 
+/* Convierte un voltaje al código del DAC. Satura a [-DAQ_V_MAX, DAQ_V_MAX]
+ * y lleva NaN a 0 V. Sólo se usa en la PC. */
+static inline uint16_t daq_voltaje_a_dac(double v)
+{
+    if (!(v == v)) {
+        v = 0.0;
+    }
+    if (v > DAQ_V_MAX) {
+        v = DAQ_V_MAX;
+    }
+    if (v < -DAQ_V_MAX) {
+        v = -DAQ_V_MAX;
+    }
+    return (uint16_t)(DAQ_DAC_ESCALA * (v + DAQ_V_MAX));
+}
+
 /* Arma la trama que envía la PC. */
 static inline void daq_armar_trama_pc(uint8_t trama[DAQ_TRAMA_LEN], uint8_t seq,
                                       uint16_t dac, uint8_t flags)

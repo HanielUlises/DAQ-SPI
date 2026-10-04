@@ -29,6 +29,7 @@ struct esclavo {
     uint8_t status_pendiente;
     int32_t posicion;
     uint16_t dac;
+    int en_falla;
 };
 
 static void esclavo_construir_respuesta(struct esclavo *e)
@@ -70,8 +71,20 @@ static void esclavo_transferir(struct esclavo *e, const uint8_t *mosi, uint8_t *
         e->dac = (uint16_t)((mosi[DAQ_PC_FLAGS] & DAQ_FLAG_SALIDA_HAB)
                                 ? ((unsigned)mosi[DAQ_PC_DAC_H] << 8) | mosi[DAQ_PC_DAC_L]
                                 : DAQ_DAC_CERO);
+        e->en_falla = 0;    /* trama válida: se reinicia la vigilancia */
     }
     esclavo_construir_respuesta(e);
+}
+
+/* Expira la vigilancia (_T1Interrupt): pasaron 50 ms sin una trama válida.
+ * La respuesta ya armada no cambia; la bandera sale en la siguiente. */
+static void esclavo_vigilancia(struct esclavo *e)
+{
+    if (!e->en_falla) {
+        e->en_falla = 1;
+        e->status_pendiente |= DAQ_STATUS_VIGILANCIA;
+        e->dac = DAQ_DAC_CERO;
+    }
 }
 
 /* ---- Pruebas ------------------------------------------------------------- */
@@ -219,6 +232,116 @@ static void prueba_secuencia(void)
     VERIFICA(pos == 0);
 }
 
+/* Cada respuesta reporta los errores ocurridos desde la anterior */
+static void prueba_errores_acumulados(void)
+{
+    struct esclavo e;
+    uint8_t mosi[DAQ_TRAMA_LEN];
+    uint8_t miso[DAQ_TRAMA_LEN + 2];
+    uint8_t seq;
+    int32_t pos;
+    uint8_t status;
+
+    memset(&e, 0, sizeof e);
+    esclavo_construir_respuesta(&e);
+
+    /* Error de inicio: se reporta en la respuesta siguiente */
+    daq_armar_trama_pc(mosi, 1u, 0x1000u, DAQ_FLAG_SALIDA_HAB);
+    mosi[DAQ_PC_INICIO] = 0x00u;
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(daq_leer_trama_pic(e.tx, &seq, &pos, &status) == 0);
+    VERIFICA(status == DAQ_STATUS_ERR_INICIO);
+
+    /* La vigilancia expira y luego llega una trama corta: ambos en un status */
+    esclavo_vigilancia(&e);
+    esclavo_transferir(&e, mosi, miso, 3u);
+    VERIFICA(daq_leer_trama_pic(e.tx, &seq, &pos, &status) == 0);
+    VERIFICA(status == (DAQ_STATUS_VIGILANCIA | DAQ_STATUS_ERR_LONGITUD));
+
+    /* Tras reportarse, el status se limpia */
+    daq_armar_trama_pc(mosi, 2u, 0x1000u, DAQ_FLAG_SALIDA_HAB);
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(daq_leer_trama_pic(e.tx, &seq, &pos, &status) == 0);
+    VERIFICA(status == 0u);
+    VERIFICA(seq == 2u);
+    VERIFICA(e.dac == 0x1000u);
+}
+
+/* El número de secuencia da la vuelta de 255 a 0 sin errores */
+static void prueba_seq_vuelta(void)
+{
+    struct esclavo e;
+    uint8_t mosi[DAQ_TRAMA_LEN];
+    uint8_t miso[DAQ_TRAMA_LEN];
+    uint8_t seq = 0u;
+    int32_t pos;
+    uint8_t status;
+    uint8_t esperado = 0u;
+    unsigned k;
+
+    memset(&e, 0, sizeof e);
+    esclavo_construir_respuesta(&e);
+
+    for (k = 250u; k < 262u; k++) {
+        daq_armar_trama_pc(mosi, (uint8_t)k, 0u, 0u);
+        esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+        VERIFICA(daq_leer_trama_pic(miso, &seq, &pos, &status) == 0);
+        if (k > 250u) {
+            VERIFICA(seq == esperado);
+        }
+        esperado = (uint8_t)k;
+    }
+    VERIFICA(e.seq_eco == (uint8_t)261u);
+}
+
+static void prueba_vigilancia(void)
+{
+    struct esclavo e;
+    uint8_t mosi[DAQ_TRAMA_LEN];
+    uint8_t miso[DAQ_TRAMA_LEN];
+    uint8_t seq;
+    int32_t pos;
+    uint8_t status;
+
+    memset(&e, 0, sizeof e);
+    esclavo_construir_respuesta(&e);
+
+    daq_armar_trama_pc(mosi, 1u, 60000u, DAQ_FLAG_SALIDA_HAB);
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(e.dac == 60000u);
+
+    /* La PC deja de enviar: el DAC va a 0 V y la bandera se levanta una vez */
+    esclavo_vigilancia(&e);
+    VERIFICA(e.dac == DAQ_DAC_CERO);
+    esclavo_vigilancia(&e);
+    esclavo_construir_respuesta(&e);
+    VERIFICA(daq_leer_trama_pic(e.tx, &seq, &pos, &status) == 0);
+    VERIFICA(status == DAQ_STATUS_VIGILANCIA);
+    esclavo_construir_respuesta(&e);
+    VERIFICA(daq_leer_trama_pic(e.tx, &seq, &pos, &status) == 0);
+    VERIFICA(status == 0u);
+
+    /* Una trama inválida no saca al esclavo de la falla */
+    daq_armar_trama_pc(mosi, 2u, 50000u, DAQ_FLAG_SALIDA_HAB);
+    mosi[DAQ_PC_CRC] ^= 0xFFu;
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(e.dac == DAQ_DAC_CERO);
+    VERIFICA(e.en_falla);
+
+    /* La comunicación se recupera con la siguiente trama válida */
+    daq_armar_trama_pc(mosi, 3u, 50000u, DAQ_FLAG_SALIDA_HAB);
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(e.dac == 50000u);
+    VERIFICA(!e.en_falla);
+
+    /* Tras recuperarse, una nueva expiración se reporta otra vez */
+    esclavo_vigilancia(&e);
+    esclavo_construir_respuesta(&e);
+    VERIFICA(daq_leer_trama_pic(e.tx, &seq, &pos, &status) == 0);
+    VERIFICA(status == DAQ_STATUS_VIGILANCIA);
+    VERIFICA(seq == 3u);
+}
+
 int main(void)
 {
     prueba_crc();
@@ -226,6 +349,9 @@ int main(void)
     prueba_voltaje();
     prueba_trama_pic();
     prueba_secuencia();
+    prueba_errores_acumulados();
+    prueba_seq_vuelta();
+    prueba_vigilancia();
 
     if (fallas == 0) {
         printf("OK: todas las pruebas pasaron\n");

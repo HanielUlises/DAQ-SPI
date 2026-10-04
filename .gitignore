@@ -63,3 +63,7 @@ desktop.ini
 .idea/
 .cache/
 compile_commands.json
+
+# Ejecutable de las pruebas del protocolo
+protocolo/prueba_protocolo
+protocolo/prueba_protocolo.exe

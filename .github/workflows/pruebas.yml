@@ -1,0 +1,22 @@
+name: Pruebas del protocolo
+
+on:
+  push:
+    paths:
+      - 'protocolo/**'
+      - '.github/workflows/pruebas.yml'
+  pull_request:
+    paths:
+      - 'protocolo/**'
+      - '.github/workflows/pruebas.yml'
+
+jobs:
+  protocolo:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar y ejecutar
+        run: make -C protocolo prueba CC=${{ matrix.cc }}

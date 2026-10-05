@@ -9,13 +9,22 @@
 #include "../../protocolo/daq_protocolo.h"
 #include "dac.h"
 #include "enlace.h"
+#include "reinicio.h"
+#include "reloj.h"
 
 int main(void)
 {
     uint16_t valor;
     uint16_t ultimo;
 
+    reinicio_registrar();
     SYSTEM_Initialize();
+    reloj_inicializar();
+
+    /* Filtro digital del QEI: MCC lo deja con el reloj de periféricos sin
+     * dividir; con FP = 50 MHz se divide entre 16 para rechazar pulsos de
+     * menos de ~1 us, como con el reloj anterior de 4 MHz. */
+    QEI1IOCbits.QFDIV = 4;
     QEI1_Enable();
 
     dac_inicializar();

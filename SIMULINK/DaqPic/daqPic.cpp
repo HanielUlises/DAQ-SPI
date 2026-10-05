@@ -40,7 +40,8 @@ static const DWORD kOpciones = SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE;
 
 static const uint8_t kStatusErrores = DAQ_STATUS_ERR_CRC | DAQ_STATUS_ERR_INICIO |
-                                      DAQ_STATUS_ERR_LONGITUD | DAQ_STATUS_VIGILANCIA;
+                                      DAQ_STATUS_ERR_LONGITUD | DAQ_STATUS_VIGILANCIA |
+                                      DAQ_STATUS_REINICIO;
 
 struct Estado {
     bool libreria;          /* Init_libMPSSE ejecutado */

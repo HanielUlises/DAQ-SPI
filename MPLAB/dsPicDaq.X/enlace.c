@@ -17,6 +17,8 @@
  */
 #include <xc.h>
 #include "enlace.h"
+#include "reinicio.h"
+#include "reloj.h"
 #include "mcc_generated_files/system/pins.h"
 #include "../../protocolo/daq_protocolo.h"
 
@@ -31,8 +33,9 @@
 /* PPS: RB10 corresponde a RP42 */
 #define PPS_RP_RB10             42u
 
-/* Vigilancia: FP = 4 MHz, preescalador 1:64 -> 62.5 kHz; 50 ms = 3125 cuentas */
-#define VIGILANCIA_PR1          3124u
+/* Vigilancia: 50 ms con el preescalador 1:256 (FP = 50 MHz -> 9765 cuentas) */
+#define VIGILANCIA_TCKPS        3u
+#define VIGILANCIA_PR1          ((uint16_t)(RELOJ_FCY / 256u / 20u - 1u))
 
 #define PRIORIDAD_ENLACE        5u
 
@@ -242,7 +245,7 @@ void enlace_inicializar(void)
 
     /* Timer1 como temporizador de vigilancia */
     T1CON = 0u;
-    T1CONbits.TCKPS = 2;        /* 1:64 */
+    T1CONbits.TCKPS = VIGILANCIA_TCKPS;
     TMR1 = 0u;
     PR1 = VIGILANCIA_PR1;
     _T1IP = PRIORIDAD_ENLACE;
@@ -253,6 +256,11 @@ void enlace_inicializar(void)
     SPI1CON1Lbits.SPIEN = 1;
     construir_respuesta();
     armar_dma();
+
+    /* La causa del arranque viaja en la primera respuesta que construya la
+     * interrupción, no en la inicial: así la PC distingue un reinicio real
+     * de una respuesta inicial repetida. */
+    status_pendiente = (uint8_t)(reinicio_causa() << DAQ_STATUS_REINICIO_POS);
 
     _INT1IF = 0;
     _INT1IE = 1;

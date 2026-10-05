@@ -12,6 +12,9 @@ void dac_inicializar(void)
     SPI2_Open(0);
 }
 
+/* SPI2 usa el divisor de MCC (SPI2BRGL = 15): SCK = FP / 32 = 1.56 MHz con
+ * FP = 50 MHz, muy por debajo del máximo del DAC8554. */
+
 /* Trama de 24 bits enmarcada por SYNC. SPI2_ByteExchange espera a que cada
  * byte termine, por lo que SYNC sube después del último bit. */
 void dac_escribir(uint16_t valor)

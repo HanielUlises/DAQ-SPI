@@ -46,6 +46,28 @@
 #define DAQ_STATUS_VIGILANCIA   0x04u   /* expiró el temporizador de vigilancia */
 #define DAQ_STATUS_ERR_LONGITUD 0x08u   /* la trama no tuvo DAQ_TRAMA_LEN bytes */
 
+/* Los 4 bits altos del status indican que el dsPIC arrancó y por qué. Se
+ * envían una sola vez, en la primera respuesta que construye la interrupción
+ * de fin de trama después del arranque (no en la respuesta inicial, que se
+ * arma antes de recibir tramas). 0 significa que no hubo reinicio. */
+#define DAQ_STATUS_REINICIO     0xF0u
+#define DAQ_STATUS_REINICIO_POS 4u
+#define DAQ_REINICIO_ENCENDIDO      1u  /* POR */
+#define DAQ_REINICIO_BAJO_VOLTAJE   2u  /* BOR sin POR */
+#define DAQ_REINICIO_MCLR           3u  /* terminal MCLR */
+#define DAQ_REINICIO_WATCHDOG       4u
+#define DAQ_REINICIO_SOFTWARE       5u  /* instrucción reset sin trampa registrada */
+#define DAQ_REINICIO_OPCODE         6u  /* opcode ilegal o W sin inicializar */
+#define DAQ_REINICIO_CONFIGURACION  7u  /* discrepancia en registros de configuración */
+#define DAQ_REINICIO_TRAMPA_OSC     8u  /* trampas: el manejador ejecuta reset */
+#define DAQ_REINICIO_TRAMPA_PILA    9u
+#define DAQ_REINICIO_TRAMPA_DIR     10u /* error de dirección */
+#define DAQ_REINICIO_TRAMPA_MAT     11u
+#define DAQ_REINICIO_TRAMPA_DMA     12u /* error de dirección del DMA (DAE) */
+#define DAQ_REINICIO_TRAMPA_HARD    13u
+#define DAQ_REINICIO_TRAMPA_OTRA    14u
+#define DAQ_REINICIO_DESCONOCIDO    15u
+
 /* Conversión de voltaje: valor = 13107 (V + 2.5), intervalo [-2.5, 2.5] V */
 #define DAQ_DAC_CERO            32767u  /* 0 V */
 #define DAQ_DAC_ESCALA          13107.0

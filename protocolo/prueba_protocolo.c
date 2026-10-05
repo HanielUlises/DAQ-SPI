@@ -87,6 +87,16 @@ static void esclavo_vigilancia(struct esclavo *e)
     }
 }
 
+/* Arranque (enlace_inicializar): la respuesta inicial no lleva la causa del
+ * reinicio; ésta sale en la primera respuesta que arma la interrupción. */
+static void esclavo_arrancar(struct esclavo *e, uint8_t causa)
+{
+    memset(e, 0, sizeof *e);
+    e->en_falla = 1;
+    esclavo_construir_respuesta(e);
+    e->status_pendiente = (uint8_t)(causa << DAQ_STATUS_REINICIO_POS);
+}
+
 /* ---- Pruebas ------------------------------------------------------------- */
 
 static void prueba_crc(void)
@@ -342,6 +352,50 @@ static void prueba_vigilancia(void)
     VERIFICA(seq == 3u);
 }
 
+static void prueba_reinicio(void)
+{
+    struct esclavo e;
+    uint8_t mosi[DAQ_TRAMA_LEN];
+    uint8_t miso[DAQ_TRAMA_LEN];
+    uint8_t seq;
+    int32_t pos;
+    uint8_t status;
+
+    /* El campo de reinicio no se encima con las banderas de error */
+    VERIFICA((DAQ_STATUS_REINICIO & (DAQ_STATUS_ERR_CRC | DAQ_STATUS_ERR_INICIO |
+                                     DAQ_STATUS_VIGILANCIA | DAQ_STATUS_ERR_LONGITUD)) == 0u);
+    VERIFICA((DAQ_REINICIO_DESCONOCIDO << DAQ_STATUS_REINICIO_POS) == DAQ_STATUS_REINICIO);
+
+    esclavo_arrancar(&e, DAQ_REINICIO_TRAMPA_DMA);
+
+    /* La respuesta inicial es la de arranque, sin causa */
+    daq_armar_trama_pc(mosi, 7u, DAQ_DAC_CERO, 0u);
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(daq_leer_trama_pic(miso, &seq, &pos, &status) == 0);
+    VERIFICA(seq == 0u);
+    VERIFICA(status == 0u);
+
+    /* La siguiente trae la causa junto con las banderas de error pendientes */
+    daq_armar_trama_pc(mosi, 8u, DAQ_DAC_CERO, 0u);
+    mosi[DAQ_PC_CRC] ^= 0xFFu;
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(daq_leer_trama_pic(miso, &seq, &pos, &status) == 0);
+    VERIFICA(seq == 7u);
+    VERIFICA((status & DAQ_STATUS_REINICIO) >> DAQ_STATUS_REINICIO_POS == DAQ_REINICIO_TRAMPA_DMA);
+    VERIFICA((status & ~DAQ_STATUS_REINICIO) == 0u);
+
+    /* Se reporta una sola vez */
+    daq_armar_trama_pc(mosi, 9u, DAQ_DAC_CERO, 0u);
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(daq_leer_trama_pic(miso, &seq, &pos, &status) == 0);
+    VERIFICA(status == DAQ_STATUS_ERR_CRC);
+    daq_armar_trama_pc(mosi, 10u, DAQ_DAC_CERO, 0u);
+    esclavo_transferir(&e, mosi, miso, DAQ_TRAMA_LEN);
+    VERIFICA(daq_leer_trama_pic(miso, &seq, &pos, &status) == 0);
+    VERIFICA(status == 0u);
+    VERIFICA(seq == 9u);
+}
+
 int main(void)
 {
     prueba_crc();
@@ -352,6 +406,7 @@ int main(void)
     prueba_errores_acumulados();
     prueba_seq_vuelta();
     prueba_vigilancia();
+    prueba_reinicio();
 
     if (fallas == 0) {
         printf("OK: todas las pruebas pasaron\n");

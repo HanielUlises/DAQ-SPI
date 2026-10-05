@@ -36,6 +36,8 @@
       </logicalFolder>
       <itemPath>enlace.h</itemPath>
       <itemPath>dac.h</itemPath>
+      <itemPath>reloj.h</itemPath>
+      <itemPath>reinicio.h</itemPath>
       <itemPath>../../protocolo/daq_protocolo.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
@@ -87,6 +89,8 @@
       <itemPath>main.c</itemPath>
       <itemPath>enlace.c</itemPath>
       <itemPath>dac.c</itemPath>
+      <itemPath>reloj.c</itemPath>
+      <itemPath>reinicio.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <projectmakefile>Makefile</projectmakefile>

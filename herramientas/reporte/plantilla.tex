@@ -1,0 +1,85 @@
+% Plantilla del reporte de una prueba del enlace. reporte.py sustituye los
+% campos @@...@@; no se compila directamente.
+\documentclass[11pt]{article}
+\usepackage[spanish,es-tabla,es-nodecimaldot,es-noshorthands]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\setlist{itemsep=2pt, topsep=4pt}
+\pdfsuppresswarningpagegroup=1
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{Prueba del enlace PC--dsPIC\\\large @@TITULO@@}
+\author{Haniel Ulises\\Departamento de Control Automático, Cinvestav}
+\date{@@FECHA@@}
+
+\begin{document}
+\maketitle
+
+\section{Configuración}
+
+\begin{table}[H]
+\centering
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Montaje      & @@MODO@@ \\
+Plataforma   & @@PLATAFORMA@@ \\
+Reloj SPI    & @@RELOJ@@\,kHz, modo 0, \code{CS} activo en bajo \\
+Ritmo        & @@RITMO@@ \\
+Salida DAC   & @@SALIDA@@ \\
+Comando      & \code{\small @@COMANDO@@} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Resultados}
+
+Se enviaron @@TRAMAS@@ tramas en @@DURACION_TOTAL@@\,s (@@TASA@@ tramas/s).
+Resultado: @@RESULTADO@@.
+
+\begin{table}[H]
+\centering
+\caption{Errores por tipo. Un evento del dsPIC se reporta en la respuesta
+siguiente a la trama que lo produjo.}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Tipo & Tramas & \% \\
+\midrule
+@@FILAS_ERRORES@@
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Duración de \code{SPI\_ReadWrite} medida en la PC, en $\mu$s.}
+\begin{tabular}{@{}rrrrrr@{}}
+\toprule
+Mínima & Media & Mediana & P99 & P99.9 & Máxima \\
+\midrule
+@@DT_MIN@@ & @@DT_MEDIA@@ & @@DT_MEDIANA@@ & @@DT_P99@@ & @@DT_P999@@ & @@DT_MAX@@ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+@@OBSERVACIONES@@
+\end{itemize}
+
+@@NOTAS@@
+
+\section{Gráficas}
+
+@@FIGURAS@@
+
+\end{document}

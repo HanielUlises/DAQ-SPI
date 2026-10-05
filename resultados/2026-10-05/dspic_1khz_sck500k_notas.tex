@@ -1,0 +1,11 @@
+\section{Análisis}
+
+Con SCK de 500\,kHz el medio periodo es de 1\,$\mu$s y los errores de CRC
+bajan del 84\,\% (a 1\,MHz) al 0.55\,\%, lo que confirma que se debían a la
+latencia del dsPIC para presentar el primer bit de cada byte.
+
+Los errores que quedan son principalmente de número de secuencia: casi todos
+corresponden a la respuesta de arranque \texttt{5A 00 00 00 00 00 00 C5}, con
+CRC válido, que aparece en el 6\,\% de las tramas igual que a 1\,MHz (ver el
+reporte \texttt{dspic\_1khz}). El dsPIC reportó además 649 tramas con
+longitud incorrecta.

@@ -1,0 +1,11 @@
+\section{Análisis}
+
+La prueba valida el lado de la PC sin el dsPIC: el FT2232H opera en modo
+MPSSE desde Linux con libftdi1 y cada uno de los 800\,000 bytes regresó
+intacto por el lazo interno MOSI\,$\to$\,MISO.
+
+Ocho bytes a 1\,MHz ocupan 64\,$\mu$s en el bus; la transferencia más corta
+midió 78\,$\mu$s, de modo que el costo del USB y de libftdi es de unos
+15\,$\mu$s. Las transferencias de varios milisegundos son esporádicas y se
+deben a la planificación del sistema operativo de la PC, que no es de tiempo
+real.

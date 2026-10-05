@@ -1,0 +1,39 @@
+Tramas: 100000, SCK: 1000 kHz, periodo: lo más rápido posible, salida: deshabilitada (0 V), lazo interno MOSI -> MISO (sin dsPIC)
+    10000 tramas
+    20000 tramas
+    30000 tramas
+    40000 tramas
+    50000 tramas
+    60000 tramas
+    70000 tramas
+    80000 tramas
+    90000 tramas
+   100000 tramas
+
+Tramas enviadas:            100000 en 11.66 s (8573 tramas/s)
+Errores en la PC
+  USB / longitud:           0
+  eco distinto del envío:   0
+  encabezado:               0
+  CRC:                      0
+  número de secuencia:      0
+Errores reportados por el dsPIC
+  CRC:                      0
+  encabezado:               0
+  longitud:                 0
+  vigilancia:               0
+Duración de SPI_ReadWrite:  mín 78 us, media 114 us, máx 3382 us
+      0 -   250 us: 99873
+    250 -   500 us: 94
+    500 -   750 us: 12
+    750 -  1000 us: 6
+   1000 -  1250 us: 3
+   1250 -  1500 us: 4
+   1500 -  1750 us: 1
+   1750 -  2000 us: 2
+   2000 -  2250 us: 1
+   2500 -  2750 us: 1
+   2750 -  3000 us: 2
+   3250 -  3500 us: 1
+
+Resultado: SIN ERRORES

@@ -1,0 +1,43 @@
+\section{Análisis}
+
+A 1\,kHz la separación entre tramas es suficiente y casi todas las respuestas
+traen el encabezado correcto, pero el 84\,\% falla el CRC. En el mapa de
+bits, las posiciones con más errores son el bit 7 de los bytes 1, 2 y 7
+(alrededor de 40\,000 cada una, contra 16\,000 como máximo en cualquier otra). Al compararlos con la respuesta esperada, en el 77\,\% de los
+151\,782 bits 7 erróneos el valor recibido es el del bit 0 del byte anterior,
+que es lo último que había en SDO. Por ejemplo, la respuesta
+esperada \texttt{5A 01 00 00 00 00 00 EC} llega como
+\texttt{5A 01 00 00 00 00 00 6C}: el bit 7 del CRC toma el valor del bit 0
+del status (0).
+
+Esto indica que el dsPIC no alcanza a poner en SDO el primer bit de cada
+byte antes de que el FT2232H lo muestree. En modo 0 el maestro lee ese bit
+en el primer flanco de subida, medio periodo de SCK (500\,ns a 1\,MHz)
+después de terminar el byte anterior, y el módulo SPI del dsPIC, sincronizado
+con un reloj de periférico de 4\,MHz (250\,ns por ciclo), necesita del orden
+de ese tiempo para cargar el byte siguiente en el registro de corrimiento.
+Las pruebas con SCK de 500 y 250\,kHz lo confirman: los errores de CRC bajan
+del 84\,\% al 0.5\,\%.
+
+Además, alrededor del 6\,\% de las respuestas trae número de secuencia 0 y
+posición 0, que es la respuesta que el firmware construye al arrancar. En
+compilación de producción, los manejadores de trampas generados por MCC
+(\texttt{traps.c}) ejecutan \texttt{reset}; entre ellas está el error de
+dirección del DMA. Estas respuestas aparecen también con SCK más lento y en
+rachas de tramas consecutivas, por lo que no se descarta que se trate del DMA
+retransmitiendo la respuesta inicial en lugar de un reinicio. Debe
+verificarse con una compilación de depuración (que se detiene en la trampa) o
+leyendo \texttt{RCON} al arrancar.
+
+\subsection*{Recomendaciones}
+
+\begin{enumerate}
+\item Elevar $F_{cy}$ con el PLL. Acorta la interrupción de fin de trama
+  (necesario para la prueba a máxima velocidad) y la latencia del SPI
+  esclavo, que causa los errores de CRC.
+\item Mientras tanto, bajar SCK a 500\,kHz elimina casi todos los errores de
+  CRC; la transferencia pasa de unos 130 a unos 190\,$\mu$s, todavía muy por
+  debajo del periodo de 1\,ms.
+\item Determinar la causa de las respuestas de arranque antes de usar el
+  bloque en lazo cerrado.
+\end{enumerate}

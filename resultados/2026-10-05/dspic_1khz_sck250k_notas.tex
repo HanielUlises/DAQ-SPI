@@ -1,0 +1,9 @@
+\section{Análisis}
+
+Con SCK de 250\,kHz los errores de CRC se mantienen bajos, como a 500\,kHz,
+pero aumentan los errores de encabezado (5.3\,\%) y las tramas que el dsPIC
+reporta con longitud incorrecta (5.7\,\%). Muchas de estas respuestas son la
+respuesta de arranque con la bandera de longitud
+(\texttt{5A 00 00 00 00 00 08 FD}). Con este reloj la transferencia dura unos
+300\,$\mu$s; la causa del aumento no se determinó y no conviene operar a esta
+frecuencia.

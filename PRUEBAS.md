@@ -142,3 +142,20 @@ a la unidad `CURIOSITY`. Los modelos anteriores (`MergedPic`, `ReadPicModificado
   ancho del pulso en RD10.
 - Captura del osciloscopio del paso 3.
 - Valores de `Errores` y `Atrasos` al terminar el paso 4.
+
+### Reporte de cada prueba
+
+Con `-registro archivo.csv`, `prueba_enlace` guarda una línea por trama
+(tiempos, bytes enviados y recibidos, resultado). `herramientas/reporte`
+genera a partir de ese archivo un reporte en PDF con tablas y gráficas
+(duración de las transferencias, errores acumulados y mapa de bits
+erróneos). Requiere Python 3, gnuplot y LaTeX (`latexmk`, `pdflatex`).
+
+```
+prueba_enlace -periodo 1000 -registro dspic_1khz.csv
+python3 herramientas/reporte/reporte.py dspic_1khz.csv
+```
+
+Si junto al CSV existe `dspic_1khz_notas.tex`, se incluye en el reporte como
+sección de análisis. `-reloj Hz` cambia la frecuencia de SCK (1 MHz por
+omisión).

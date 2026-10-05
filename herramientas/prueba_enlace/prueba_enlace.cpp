@@ -22,12 +22,20 @@
  * byte recibido sea igual al enviado. Sirve para probar el FT2232H y medir la
  * duración de las transferencias sin el dsPIC conectado.
  *
- * Uso: prueba_enlace [-n tramas] [-periodo us] [-salida] [-lazo]
+ * Con -registro se escribe un CSV con una línea por trama (tiempos, bytes
+ * enviados y recibidos, resultado), del que herramientas/reporte genera el
+ * reporte de la prueba.
+ *
+ * -reloj cambia la frecuencia de SCK (por omisión 1 MHz, la de daqPic).
+ *
+ * Uso: prueba_enlace [-n tramas] [-periodo us] [-reloj Hz] [-salida] [-lazo]
+ *                    [-registro archivo.csv]
  */
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <ctime>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -39,7 +47,6 @@
 #endif
 #include "../../protocolo/daq_protocolo.h"
 
-static const DWORD kReloj = 1000000;
 static const DWORD kOpciones = SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE;
@@ -122,6 +129,27 @@ static uint16_t aleatorio(void)
     return (uint16_t)x;
 }
 
+static void escribir_bytes(FILE *f, const uint8_t *b)
+{
+    for (unsigned i = 0; i < DAQ_TRAMA_LEN; i++) {
+        fprintf(f, "%02X", b[i]);
+    }
+}
+
+/* Una línea del registro por trama */
+static void registrar(FILE *f, unsigned long k, double t, double dt, const uint8_t *tx,
+                      const uint8_t *rx, const char *resultado, int status)
+{
+    if (f == NULL) return;
+    fprintf(f, "%lu,%.1f,%.1f,", k, t, dt);
+    escribir_bytes(f, tx);
+    fputc(',', f);
+    escribir_bytes(f, rx);
+    fprintf(f, ",%s,", resultado);
+    if (status >= 0) fprintf(f, "%02X", status);
+    fputc('\n', f);
+}
+
 static void enviar_reposo(FT_HANDLE h, uint8_t seq)
 {
     uint8_t tx[DAQ_TRAMA_LEN];
@@ -136,22 +164,29 @@ int main(int argc, char **argv)
 {
     unsigned long total = 100000ul;
     double periodo_us = 0.0;
+    DWORD reloj = 1000000;
     bool salida = false;
     bool lazo = false;
+    const char *ruta_registro = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-n") && i + 1 < argc) {
             total = strtoul(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-periodo") && i + 1 < argc) {
             periodo_us = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "-reloj") && i + 1 < argc) {
+            reloj = (DWORD)strtoul(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-salida")) {
             salida = true;
+        } else if (!strcmp(argv[i], "-registro") && i + 1 < argc) {
+            ruta_registro = argv[++i];
 #ifndef _WIN32
         } else if (!strcmp(argv[i], "-lazo")) {
             lazo = true;
 #endif
         } else {
-            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-salida]%s\n", argv[0],
+            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-reloj Hz] [-salida]%s"
+                            " [-registro archivo.csv]\n", argv[0],
 #ifdef _WIN32
                     "");
 #else
@@ -167,6 +202,27 @@ int main(int argc, char **argv)
 #else
     signal(SIGINT, manejar_ctrl_c);
 #endif
+    FILE *registro = NULL;
+    if (ruta_registro != NULL) {
+        registro = fopen(ruta_registro, "w");
+        if (registro == NULL) {
+            fprintf(stderr, "No se pudo crear %s.\n", ruta_registro);
+            return 2;
+        }
+        char fecha[32];
+        time_t ahora = time(NULL);
+        strftime(fecha, sizeof fecha, "%Y-%m-%d %H:%M:%S", localtime(&ahora));
+        fprintf(registro, "# comando:");
+        for (int i = 0; i < argc; i++) fprintf(registro, " %s", argv[i]);
+        fprintf(registro, "\n# fecha: %s\n# plataforma: %s\n", fecha,
+#ifdef _WIN32
+                "Windows");
+#else
+                "Linux");
+#endif
+        fprintf(registro, "trama,t_us,dt_us,mosi,miso,resultado,status\n");
+    }
+
     Init_libMPSSE();
 
     DWORD canales = 0;
@@ -184,7 +240,7 @@ int main(int argc, char **argv)
 
     ChannelConfig conf;
     memset(&conf, 0, sizeof conf);
-    conf.ClockRate = kReloj;
+    conf.ClockRate = reloj;
     conf.LatencyTimer = 1;
     conf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 |
                          SPI_CONFIG_OPTION_CS_ACTIVELOW;
@@ -203,7 +259,8 @@ int main(int argc, char **argv)
     }
 #endif
 
-    printf("Tramas: %lu, periodo: %s, salida: %s%s\n", total,
+    printf("Tramas: %lu, SCK: %lu kHz, periodo: %s, salida: %s%s\n", total,
+           (unsigned long)(reloj / 1000u),
            periodo_us > 0.0 ? "fijo" : "lo más rápido posible",
            salida ? "rampa +/-1 V" : "deshabilitada (0 V)",
            lazo ? ", lazo interno MOSI -> MISO (sin dsPIC)" : "");
@@ -236,6 +293,7 @@ int main(int argc, char **argv)
         }
 
         const double t0 = reloj_us();
+        const double t_rel = t0 - inicio;
         FT_STATUS st = SPI_ReadWrite(h, rx, tx, DAQ_TRAMA_LEN, &n, kOpciones);
         const double dt = reloj_us() - t0;
         t_suma += dt;
@@ -247,11 +305,14 @@ int main(int argc, char **argv)
 
         if (st != FT_OK || n != DAQ_TRAMA_LEN) {
             c.err_usb++;
+            registrar(registro, k, t_rel, dt, tx, rx, "usb", -1);
             continue;
         }
 
         if (lazo) {
-            if (memcmp(rx, tx, DAQ_TRAMA_LEN) != 0) c.err_eco++;
+            const bool igual = memcmp(rx, tx, DAQ_TRAMA_LEN) == 0;
+            if (!igual) c.err_eco++;
+            registrar(registro, k, t_rel, dt, tx, rx, igual ? "ok" : "eco", -1);
             if ((k + 1) % 10000u == 0) printf("  %7lu tramas\n", k + 1);
             continue;
         }
@@ -261,11 +322,17 @@ int main(int argc, char **argv)
         int r = daq_leer_trama_pic(rx, &seq_eco, &posicion, &status);
         if (r == -1) {
             c.err_inicio++;
+            registrar(registro, k, t_rel, dt, tx, rx, "inicio", -1);
         } else if (r == -2) {
             c.err_crc++;
-        } else if (k > 0) {
+            registrar(registro, k, t_rel, dt, tx, rx, "crc", -1);
+        } else if (k == 0) {
+            registrar(registro, k, t_rel, dt, tx, rx, "primera", status);
+        } else {
             /* La primera respuesta refleja el estado previo a la prueba */
             if (seq_eco != seq_anterior) c.err_seq++;
+            registrar(registro, k, t_rel, dt, tx, rx,
+                      seq_eco != seq_anterior ? "seq" : "ok", status);
             if (status & DAQ_STATUS_ERR_CRC) c.pic_crc++;
             if (status & DAQ_STATUS_ERR_INICIO) c.pic_inicio++;
             if (status & DAQ_STATUS_ERR_LONGITUD) c.pic_longitud++;
@@ -285,6 +352,7 @@ int main(int argc, char **argv)
     enviar_reposo(h, (uint8_t)c.tramas);
     SPI_CloseChannel(h);
     Cleanup_libMPSSE();
+    if (registro != NULL) fclose(registro);
 
     const double t_total = (fin - inicio) * 1e-6;
     const unsigned long errores = c.err_usb + c.err_eco + c.err_inicio + c.err_crc + c.err_seq +

@@ -70,3 +70,9 @@ protocolo/prueba_protocolo.exe
 
 # Ejecutable de prueba_enlace en Linux
 herramientas/prueba_enlace/prueba_enlace
+
+# Pruebas del enlace: se versionan los reportes (PDF), las notas y la salida
+# de prueba_enlace; los registros CSV y los archivos intermedios se regeneran.
+resultados/**/*.csv
+resultados/*/*/
+__pycache__/

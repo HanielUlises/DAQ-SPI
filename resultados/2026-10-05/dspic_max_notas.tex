@@ -1,0 +1,27 @@
+\section{Análisis}
+
+A máxima velocidad el 95\,\% de las respuestas llega sin el encabezado
+\texttt{5A}. El error depende de la separación entre transferencias, medida en
+la PC entre el fin de una llamada y el inicio de la siguiente:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Separación & Tramas & Encabezado correcto \\
+\midrule
+menos de 20\,$\mu$s     & 98\,845 & 4.5\,\% \\
+20 a 60\,$\mu$s         & 1\,139  & 53.6\,\% \\
+60 a 100\,$\mu$s        & 7       & 57.1\,\% \\
+100\,$\mu$s o más       & 7       & 100\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La respuesta de cada trama se arma en la interrupción de fin de la trama
+anterior, que además reinicia SPI1 y vuelve a programar el DMA. Con
+$F_{cy} = 4$\,MHz esa rutina se estimó en unos 100\,$\mu$s; si la siguiente
+trama comienza antes de que termine, el primer byte que sale por MISO no es
+el encabezado. Con el reloj actual del dsPIC esta prueba no puede pasar: el
+intervalo mínimo entre tramas lo fija la duración de la interrupción, que
+debe medirse con el analizador lógico en RD10.

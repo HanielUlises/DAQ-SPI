@@ -1,0 +1,42 @@
+Tramas: 100000, SCK: 1000 kHz, periodo: fijo, salida: deshabilitada (0 V)
+    10000 tramas, posición 0
+    20000 tramas, posición 0
+    30000 tramas, posición 0
+    40000 tramas, posición 0
+    50000 tramas, posición 0
+    60000 tramas, posición 0
+    70000 tramas, posición 0
+    80000 tramas, posición 0
+    90000 tramas, posición 0
+   100000 tramas, posición 0
+
+Tramas enviadas:            100000 en 100.00 s (1000 tramas/s)
+Errores en la PC
+  USB / longitud:           0
+  encabezado:               132
+  CRC:                      83670
+  número de secuencia:      163
+Errores reportados por el dsPIC
+  CRC:                      1
+  encabezado:               1
+  longitud:                 65
+  vigilancia:               0
+Duración de SPI_ReadWrite:  mín 83 us, media 128 us, máx 3950 us
+      0 -   250 us: 99471
+    250 -   500 us: 285
+    500 -   750 us: 49
+    750 -  1000 us: 58
+   1000 -  1250 us: 24
+   1250 -  1500 us: 18
+   1500 -  1750 us: 11
+   1750 -  2000 us: 28
+   2000 -  2250 us: 15
+   2250 -  2500 us: 2
+   2500 -  2750 us: 3
+   2750 -  3000 us: 16
+   3000 -  3250 us: 11
+   3250 -  3500 us: 1
+   3500 -  3750 us: 3
+  >=  3750 us:       5
+
+Resultado: CON ERRORES

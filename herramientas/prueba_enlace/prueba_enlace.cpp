@@ -11,21 +11,32 @@
  * -salida se envía una rampa triangular de +/-1 V para verificarla con
  * osciloscopio.
  *
- * Compilación (x64 Native Tools Command Prompt de Visual Studio):
+ * Compilación en Windows (x64 Native Tools Command Prompt de Visual Studio):
  *   compilar.bat
  * libmpsse.dll y msvcr120.dll deben estar junto al ejecutable. Se incluye un
  * ejecutable ya compilado.
  *
- * Uso: prueba_enlace [-n tramas] [-periodo us] [-salida]
+ * Compilación en Linux (requiere libftdi1, ver mpsse_linux.h):
+ *   make
+ * En Linux, -lazo une MOSI con MISO dentro del FT2232H y verifica que cada
+ * byte recibido sea igual al enviado. Sirve para probar el FT2232H y medir la
+ * duración de las transferencias sin el dsPIC conectado.
+ *
+ * Uso: prueba_enlace [-n tramas] [-periodo us] [-salida] [-lazo]
  */
-#include <windows.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
+#ifdef _WIN32
+#include <windows.h>
 #include "ftd2xx.h"
 #include "libmpsse_spi.h"
+#else
+#include <csignal>
+#include "mpsse_linux.h"
+#endif
 #include "../../protocolo/daq_protocolo.h"
 
 static const DWORD kReloj = 1000000;
@@ -33,6 +44,7 @@ static const DWORD kOpciones = SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE;
 
+#ifdef _WIN32
 static volatile LONG detener = 0;
 
 static BOOL WINAPI manejar_ctrl_c(DWORD evento)
@@ -44,9 +56,39 @@ static BOOL WINAPI manejar_ctrl_c(DWORD evento)
     return FALSE;
 }
 
+/* Tiempo en microsegundos desde un origen arbitrario */
+static double reloj_us(void)
+{
+    static double us_por_cuenta = 0.0;
+    LARGE_INTEGER t;
+    if (us_por_cuenta == 0.0) {
+        LARGE_INTEGER frec;
+        QueryPerformanceFrequency(&frec);
+        us_por_cuenta = 1e6 / (double)frec.QuadPart;
+    }
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart * us_por_cuenta;
+}
+#else
+static volatile sig_atomic_t detener = 0;
+
+static void manejar_ctrl_c(int)
+{
+    detener = 1;
+}
+
+static double reloj_us(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1e6 + (double)t.tv_nsec * 1e-3;
+}
+#endif
+
 struct Contadores {
     unsigned long tramas;
     unsigned long err_usb;
+    unsigned long err_eco;
     unsigned long err_inicio;
     unsigned long err_crc;
     unsigned long err_seq;
@@ -95,6 +137,7 @@ int main(int argc, char **argv)
     unsigned long total = 100000ul;
     double periodo_us = 0.0;
     bool salida = false;
+    bool lazo = false;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-n") && i + 1 < argc) {
@@ -103,14 +146,27 @@ int main(int argc, char **argv)
             periodo_us = atof(argv[++i]);
         } else if (!strcmp(argv[i], "-salida")) {
             salida = true;
+#ifndef _WIN32
+        } else if (!strcmp(argv[i], "-lazo")) {
+            lazo = true;
+#endif
         } else {
-            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-salida]\n", argv[0]);
+            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-salida]%s\n", argv[0],
+#ifdef _WIN32
+                    "");
+#else
+                    " [-lazo]");
+#endif
             return 2;
         }
     }
 
+#ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCtrlHandler(manejar_ctrl_c, TRUE);
+#else
+    signal(SIGINT, manejar_ctrl_c);
+#endif
     Init_libMPSSE();
 
     DWORD canales = 0;
@@ -139,13 +195,18 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    printf("Tramas: %lu, periodo: %s, salida: %s\n", total,
-           periodo_us > 0.0 ? "fijo" : "lo más rápido posible",
-           salida ? "rampa +/-1 V" : "deshabilitada (0 V)");
+#ifndef _WIN32
+    if (lazo && SPI_Lazo(h, true) != FT_OK) {
+        fprintf(stderr, "No se pudo activar el lazo interno.\n");
+        SPI_CloseChannel(h);
+        return 2;
+    }
+#endif
 
-    LARGE_INTEGER frec, t0, t1, inicio, fin;
-    QueryPerformanceFrequency(&frec);
-    const double us_por_cuenta = 1e6 / (double)frec.QuadPart;
+    printf("Tramas: %lu, periodo: %s, salida: %s%s\n", total,
+           periodo_us > 0.0 ? "fijo" : "lo más rápido posible",
+           salida ? "rampa +/-1 V" : "deshabilitada (0 V)",
+           lazo ? ", lazo interno MOSI -> MISO (sin dsPIC)" : "");
 
     Contadores c;
     memset(&c, 0, sizeof c);
@@ -157,8 +218,8 @@ int main(int argc, char **argv)
     uint8_t rx[DAQ_TRAMA_LEN];
     uint8_t seq_anterior = 0;
 
-    QueryPerformanceCounter(&inicio);
-    LARGE_INTEGER siguiente = inicio;
+    const double inicio = reloj_us();
+    double siguiente = inicio;
 
     for (unsigned long k = 0; k < total && !detener; k++) {
         const uint8_t seq = (uint8_t)k;
@@ -169,17 +230,14 @@ int main(int argc, char **argv)
         daq_armar_trama_pc(tx, seq, dac, flags);
 
         if (periodo_us > 0.0) {
-            siguiente.QuadPart += (LONGLONG)(periodo_us / us_por_cuenta);
-            do {
-                QueryPerformanceCounter(&t0);
-            } while (t0.QuadPart < siguiente.QuadPart);
+            siguiente += periodo_us;
+            while (reloj_us() < siguiente) {
+            }
         }
 
-        QueryPerformanceCounter(&t0);
+        const double t0 = reloj_us();
         FT_STATUS st = SPI_ReadWrite(h, rx, tx, DAQ_TRAMA_LEN, &n, kOpciones);
-        QueryPerformanceCounter(&t1);
-
-        const double dt = (double)(t1.QuadPart - t0.QuadPart) * us_por_cuenta;
+        const double dt = reloj_us() - t0;
         t_suma += dt;
         if (dt < t_min) t_min = dt;
         if (dt > t_max) t_max = dt;
@@ -192,8 +250,14 @@ int main(int argc, char **argv)
             continue;
         }
 
+        if (lazo) {
+            if (memcmp(rx, tx, DAQ_TRAMA_LEN) != 0) c.err_eco++;
+            if ((k + 1) % 10000u == 0) printf("  %7lu tramas\n", k + 1);
+            continue;
+        }
+
         uint8_t seq_eco, status;
-        int32_t posicion;
+        int32_t posicion = 0;
         int r = daq_leer_trama_pic(rx, &seq_eco, &posicion, &status);
         if (r == -1) {
             c.err_inicio++;
@@ -214,13 +278,16 @@ int main(int argc, char **argv)
         }
     }
 
-    QueryPerformanceCounter(&fin);
+    const double fin = reloj_us();
+#ifndef _WIN32
+    if (lazo) SPI_Lazo(h, false);
+#endif
     enviar_reposo(h, (uint8_t)c.tramas);
     SPI_CloseChannel(h);
     Cleanup_libMPSSE();
 
-    const double t_total = (double)(fin.QuadPart - inicio.QuadPart) * us_por_cuenta * 1e-6;
-    const unsigned long errores = c.err_usb + c.err_inicio + c.err_crc + c.err_seq +
+    const double t_total = (fin - inicio) * 1e-6;
+    const unsigned long errores = c.err_usb + c.err_eco + c.err_inicio + c.err_crc + c.err_seq +
                                   c.pic_crc + c.pic_inicio + c.pic_longitud +
                                   c.pic_vigilancia;
 
@@ -228,6 +295,9 @@ int main(int argc, char **argv)
            t_total, t_total > 0.0 ? (double)c.tramas / t_total : 0.0);
     printf("Errores en la PC\n");
     printf("  USB / longitud:           %lu\n", c.err_usb);
+    if (lazo) {
+        printf("  eco distinto del envío:   %lu\n", c.err_eco);
+    }
     printf("  encabezado:               %lu\n", c.err_inicio);
     printf("  CRC:                      %lu\n", c.err_crc);
     printf("  número de secuencia:      %lu\n", c.err_seq);

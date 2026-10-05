@@ -21,6 +21,30 @@ paso 3 genera una rampa de ±1 V y el paso 4 una senoidal de 0.5 V, por lo que
 el motor se mueve. En cualquier paso, si la PC deja de enviar tramas durante
 50 ms, el dsPIC lleva el DAC a 0 V.
 
+## 0. Prueba previa del FT2232H en Linux (opcional)
+
+`prueba_enlace` también compila en Linux con libftdi1 (Fedora:
+`libftdi-devel`). El FT2232H de la tarjeta tiene la EEPROM reprogramada como
+`2099:0001` ("Custom DAC USB Bridge"), por lo que `ftdi_sio` no lo reclama y
+hace falta una regla udev para usarlo sin `sudo` (una sola vez):
+
+```
+sudo cp herramientas/prueba_enlace/70-daq-spi.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+```
+make -C herramientas/prueba_enlace
+herramientas/prueba_enlace/prueba_enlace -lazo
+herramientas/prueba_enlace/prueba_enlace -lazo -periodo 1000
+```
+
+`-lazo` une MOSI con MISO dentro del FT2232H, así que no requiere el dsPIC:
+verifica que el FT2232H opere en modo MPSSE y que cada byte regrese intacto,
+y mide la duración de las transferencias. Con el dsPIC conectado, las mismas
+opciones de los pasos 2 y 3 funcionan igual que en Windows. Los tiempos
+medidos en Linux no sustituyen a los de Windows, porque el driver es otro.
+
 ## 1. Cargar el firmware
 
 1. Conectar la Curiosity Nano por USB. Aparece la unidad `CURIOSITY`.

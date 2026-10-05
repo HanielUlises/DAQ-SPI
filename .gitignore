@@ -67,3 +67,6 @@ compile_commands.json
 # Ejecutable de las pruebas del protocolo
 protocolo/prueba_protocolo
 protocolo/prueba_protocolo.exe
+
+# Ejecutable de prueba_enlace en Linux
+herramientas/prueba_enlace/prueba_enlace

@@ -1,0 +1,5 @@
+# Acceso sin sudo al FT2232H de la tarjeta (EEPROM reprogramada como
+# 2099:0001 "Custom DAC USB Bridge"). Instalación:
+#   sudo cp 70-daq-spi.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="2099", ATTRS{idProduct}=="0001", MODE="0664", TAG+="uaccess"

@@ -1,0 +1,16 @@
+\section{Análisis}
+
+Prueba corrida con \texttt{visor\_enlace} (interfaz gráfica en la misma PC),
+con el mismo firmware que \texttt{resultados/2026-10-05\_pll}
+($F_{cy} = 50$\,MHz). El patrón de errores es el mismo que con
+\texttt{prueba\_enlace}: no hay errores de encabezado ni reinicios, y cada
+respuesta con CRC incorrecto va seguida de la bandera de longitud del dsPIC
+para la misma transferencia (columna ``status siguiente'' en la captura). La
+corrupción empieza en el byte 1 en el 70\,\% de los casos y en el byte 7 en
+el 20\,\% (61\,\% y 26\,\% con \texttt{prueba\_enlace}).
+
+La proporción de tramas afectadas fue de 1.0\,\%, contra 0.7\,\% con
+\texttt{prueba\_enlace}. Con dos corridas no se puede distinguir si la
+diferencia se debe a la carga de la interfaz gráfica o a la variación entre
+corridas; el origen del defecto está en la frontera de bytes del SPI esclavo
+y debe revisarse con el analizador lógico.

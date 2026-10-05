@@ -1,0 +1,14 @@
+\section{Análisis}
+
+Firmware \texttt{dsPicDaq} con el PLL ($F_{cy} = 50$\,MHz) y reporte de la
+causa de reinicio. Con el reloj anterior de 4\,MHz esta prueba tuvo
+94.9\,\% de respuestas sin encabezado, porque la interrupción de fin de trama
+no alcanzaba a rearmar el DMA entre transferencias
+(\texttt{resultados/2026-10-05/dspic\_max}); ahora no hubo ningún error de
+encabezado aun con la separación mínima entre transferencias.
+
+Los errores restantes (0.6\,\% de CRC en la PC y 0.65\,\% de tramas con
+longitud incorrecta reportadas por el dsPIC) tienen el mismo origen que en
+la prueba a 1\,kHz; ver el reporte \texttt{dspic\_1khz} de esta carpeta. La
+única bandera de vigilancia corresponde a la pausa entre la prueba anterior y
+ésta.

@@ -1,0 +1,43 @@
+\section{Análisis}
+
+Firmware \texttt{dsPicDaq} con el PLL ($F_{cy} = 50$\,MHz) y reporte de la
+causa de reinicio en los cuatro bits altos del status. Comparado con el
+firmware a 4\,MHz (\texttt{resultados/2026-10-05/dspic\_1khz}):
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & $F_{cy} = 4$\,MHz & $F_{cy} = 50$\,MHz \\
+\midrule
+CRC incorrecto en la PC        & 83.7\,\% & 0.68\,\% \\
+Respuestas de arranque         & 5.9\,\%  & 0 \\
+Reinicios reportados           & --       & 0 \\
+Longitud incorrecta (dsPIC)    & 0.07\,\% & 0.72\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El bit 7 de los bytes ya llega correcto: con $F_P = 50$\,MHz el SPI esclavo
+presenta el primer bit de cada byte mucho antes del flanco en que lo muestrea
+el FT2232H. Las respuestas de arranque (secuencia 0) desaparecieron y el
+dsPIC no reportó ningún reinicio, por lo que las del firmware anterior
+estaban ligadas al reloj de 4\,MHz; con el reporte de causa, un reinicio
+futuro ya no pasaría inadvertido. La única respuesta contada como de
+arranque es una trama legítima con eco de la secuencia 0.
+
+Queda un defecto en el 0.7\,\% de las transferencias. En 672 de las 675
+respuestas con CRC incorrecto, el dsPIC reporta en la respuesta siguiente
+que esa misma transferencia no tuvo 8 bytes: la falla daña ambos sentidos a
+la vez. Comparando con la respuesta esperada, la corrupción empieza en el
+byte 1 en el 63\,\% de los casos y en el byte 7 en el 26\,\%.
+
+El byte 1 es el que \texttt{armar\_dma()} entrega con una solicitud por
+software cuando el evento SPITBE ocurrió antes de habilitar el canal; el
+README ya lo señalaba como el punto que no podía verificarse sin hardware.
+Con la CPU 12.5 veces más rápida cambió la relación de tiempos entre esa
+solicitud y el evento, y en algunas tramas el canal de transmisión parece
+recibir un disparo de más o de menos. Los errores en el byte 7 apuntan a la
+frontera con el flanco de subida de \texttt{CS}. Ambos casos deben
+observarse con el analizador lógico (SCK, MISO, \texttt{CS} y RD10) antes de
+modificar \texttt{armar\_dma()}.

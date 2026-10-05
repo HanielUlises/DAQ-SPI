@@ -1,0 +1,5 @@
+Tramas: 100000 en 100.00 s (1000 tramas/s)
+Errores: 0 (USB 0, eco 0, encabezado 0, CRC 0, secuencia 0; dsPIC: CRC 0, encabezado 0, longitud 0, vigilancia 0, reinicios 0)
+Atrasos: 89
+Duración de SPI_ReadWrite: mín 85 us, media 122 us, máx 6184 us
+Resultado: SIN ERRORES

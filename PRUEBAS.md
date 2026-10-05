@@ -159,3 +159,32 @@ python3 herramientas/reporte/reporte.py dspic_1khz.csv
 Si junto al CSV existe `dspic_1khz_notas.tex`, se incluye en el reporte como
 sección de análisis. `-reloj Hz` cambia la frecuencia de SCK (1 MHz por
 omisión).
+
+### Visor en tiempo real
+
+`herramientas/visor_enlace` corre la misma prueba que `prueba_enlace` con
+una interfaz al estilo del Scope de Simulink: voltaje de salida, posición
+del encoder y duración de cada transferencia con el eje de tiempo ligado,
+contadores `Errores` y `Atrasos`, disparo por error, la tabla de tramas con
+error (con la respuesta esperada y el status de la respuesta siguiente) y el
+mapa de bits erróneos. Incluye un generador de señal para la salida, que
+arranca deshabilitada (0 V). Requiere GLFW y OpenGL (Fedora: `glfw-devel
+mesa-libGL-devel`) además de libftdi1.
+
+```
+make -C herramientas/visor_enlace
+herramientas/visor_enlace/visor_enlace -periodo 1000
+herramientas/visor_enlace/visor_enlace -simulado     # sin hardware
+make -C herramientas/visor_enlace prueba             # pruebas sin hardware
+```
+
+### Batería de pruebas
+
+`herramientas/bateria_pruebas.sh` corre en secuencia el lazo interno y el
+dsPIC, cada uno lo más rápido posible y a 1 kHz, guarda registro y salida de
+cada prueba y genera los reportes. Con `-visor` usa el visor y agrega al
+reporte la captura de la ventana al terminar.
+
+```
+herramientas/bateria_pruebas.sh -visor
+```

@@ -10,7 +10,8 @@ Uso:
 
 Por cada `prueba.csv` se crea la carpeta `prueba/` con los archivos
 intermedios y el reporte `prueba.pdf` junto al CSV. Si existe
-`prueba_notas.tex`, se incluye como sección de observaciones.
+`prueba_notas.tex`, se incluye como sección de observaciones, y si existe
+`prueba.png` (captura de visor_enlace), como figura.
 
 Requiere gnuplot (con cairolatex) y latexmk con pdflatex.
 """
@@ -29,7 +30,13 @@ STATUS = [
     (0x02, 'pic_inicio', 'Encabezado (reportado por el dsPIC)'),
     (0x08, 'pic_longitud', 'Longitud (reportado por el dsPIC)'),
     (0x04, 'pic_vigilancia', 'Vigilancia (reportado por el dsPIC)'),
+    (0xF0, 'pic_reinicio', 'Reinicio (reportado por el dsPIC)'),
 ]
+# Causa de reinicio en los 4 bits altos del status (DAQ_REINICIO_*)
+CAUSAS_REINICIO = ['', 'encendido', 'bajo voltaje', 'MCLR', 'watchdog', 'reset por software',
+                   'opcode ilegal / W sin inicializar', 'configuración', 'trampa: oscilador',
+                   'trampa: pila', 'trampa: dirección', 'trampa: matemática', 'trampa: DMA',
+                   'trampa: hard', 'trampa: otra', 'desconocida']
 TIPOS_PC = [
     ('usb', 'USB / longitud'),
     ('eco', 'Eco distinto del envío'),
@@ -150,6 +157,7 @@ def analizar(filas, conf):
     # Conteo por tipo, en el mismo orden que prueba_enlace
     cuenta = {clave: 0 for clave, _ in TIPOS_PC}
     cuenta.update({clave: 0 for _, clave, _ in STATUS})
+    causas = {}
     acumulado = []
     for f in filas:
         if f['res'] in cuenta:
@@ -158,8 +166,11 @@ def analizar(filas, conf):
             for bit, clave, _ in STATUS:
                 if f['status'] & bit:
                     cuenta[clave] += 1
+            if f['status'] >> 4:
+                causas[f['status'] >> 4] = causas.get(f['status'] >> 4, 0) + 1
         acumulado.append(dict(cuenta))
     a['cuenta'] = cuenta
+    a['causas'] = causas
     a['acumulado'] = acumulado
     a['errores'] = sum(cuenta.values())
     a['tramas_ok'] = sum(1 for f in filas if f['res'] == 'ok')
@@ -181,8 +192,8 @@ def analizar(filas, conf):
             # aceptó (normalmente la anterior) y el status puede traer una
             # bandera pendiente: se toma la candidata más cercana.
             candidatas = [respuesta(filas[j]['mosi'][1], pos, st)
-                          for j in (i - 1, i - 2) if j >= 0
-                          for st in (0, 1, 2, 4, 8, 9, 10, 12)]
+                          for j in (i - 1, i - 2, i - 3) if j >= 0
+                          for st in {0, 1, 2, 4, 8, 9, 10, 12, f['miso'][6]}]
             esperada = min(candidatas, key=lambda c: distancia(c, f['miso']))
         analizadas += 1
         if esperada != f['miso']:
@@ -344,6 +355,9 @@ def observaciones(a, conf):
                    f"{num(a['mapa_distintas'])} difieren en {num(a['bits_erroneos'])} bits. "
                    f"El {100.0 * a['bits_msb'] / a['bits_erroneos']:.1f}\\,\\% de los bits erróneos "
                    f"corresponde al bit más significativo de algún byte.")
+    if a['causas']:
+        obs.append('El dsPIC reportó reinicios por: ' + ', '.join(
+            f"{tex(CAUSAS_REINICIO[c])} ({num(n)})" for c, n in sorted(a['causas'].items())) + '.')
     if a['arranque'] > 0:
         obs.append(f"{num(a['arranque'])} respuestas ({100.0 * a['arranque'] / n:.1f}\\,\\%) traen número de "
                    f"secuencia 0 y posición 0, como la que construye el firmware al arrancar, aunque la trama "
@@ -379,6 +393,13 @@ def generar(ruta_csv):
 
     notas = base + '_notas.tex'
     secciones_figuras = []
+    if os.path.exists(base + '.png'):
+        shutil.copy(base + '.png', os.path.join(dir_salida, 'captura.png'))
+        secciones_figuras.append(
+            r'\begin{figure}[H]\centering'
+            r'\includegraphics[width=\linewidth]{captura.png}'
+            r'\caption{Ventana de \code{visor\_enlace} al terminar la prueba.}'
+            r'\end{figure}')
     if 'fig_duracion' in figuras:
         secciones_figuras.append(
             r'\begin{figure}[H]\centering\input{fig_duracion.tex}'
@@ -412,6 +433,7 @@ def generar(ruta_csv):
         'FECHA': tex(meta.get('fecha', '')),
         'PLATAFORMA': tex(meta.get('plataforma', '')),
         'COMANDO': tex(comando_corto(meta.get('comando', ''))),
+        'FILA_VISOR': f"Visor        & {tex(meta['visor'])} \\\\" if 'visor' in meta else '',
         'MODO': modo,
         'RITMO': ritmo,
         'RELOJ': num(conf['reloj'] / 1000),

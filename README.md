@@ -22,8 +22,10 @@ periféricos:
 | SPI2 (maestro) | Escritura al DAC8554 |
 | QEI1 | Conteo de pulsos del encoder del motor |
 
-El reloj del microcontrolador proviene del oscilador interno FRC de 8 MHz, sin
-PLL (F<sub>osc</sub> = 8 MHz, F<sub>cy</sub> = 4 MHz).
+El reloj del microcontrolador proviene del oscilador interno FRC de 8 MHz. Los
+firmwares anteriores lo usan sin PLL (F<sub>osc</sub> = 8 MHz,
+F<sub>cy</sub> = 4 MHz); `dsPicDaq` activa el PLL primario
+(F<sub>osc</sub> = 100 MHz, F<sub>cy</sub> = 50 MHz).
 
 ### Convertidor digital-analógico
 
@@ -158,8 +160,8 @@ el plan de validación se encuentran en [`docs/propuesta.pdf`](docs/propuesta.pd
 
 | Etapa | Estado |
 |---|---|
-| 1. Firmware `dsPicDaq` | Implementado; compila sin advertencias con XC-DSC v4.00. Pendiente de validar en la tarjeta |
-| 2. Programa de prueba en la PC | Implementado (`herramientas/prueba_enlace`). Pendiente de ejecutar con el hardware |
+| 1. Firmware `dsPicDaq` | Implementado, con PLL (F<sub>cy</sub> = 50 MHz). En la tarjeta, sin errores de encabezado ni reinicios; el 0.7 % de las transferencias falla en el segundo o el último byte, pendiente de revisar con el analizador lógico ([`resultados/2026-10-05_pll`](resultados/2026-10-05_pll)) |
+| 2. Programa de prueba en la PC | Implementado (`herramientas/prueba_enlace`); probado en Linux con libftdi1. Pendiente en Windows |
 | 3. Bloque de Simulink | Implementado (`SIMULINK/DaqPic`). Pendiente de compilar y ejecutar en MATLAB |
 | 4. Pruebas con el motor | Pendiente |
 
@@ -193,6 +195,23 @@ una trama válida, el DAC se lleva a 0 V y se reporta en el byte `status`.
 El proyecto se compila con optimización `-O1` para acortar la interrupción de
 fin de trama, que determina el intervalo mínimo entre tramas.
 
+El reloj se eleva con el PLL a F<sub>cy</sub> = 50 MHz (`reloj.c`; MCC
+genera la configuración sin PLL y en `config_bits.c` se habilita el cambio de
+reloj). Con el reloj original de 4 MHz la interrupción de fin de trama tardaba
+alrededor de 100 µs y el SPI esclavo no alcanzaba a presentar a tiempo el
+primer bit de cada byte a 1 MHz; ver `resultados/2026-10-05/`.
+
+Los cuatro bits altos del byte `status` informan, una sola vez después de
+cada arranque, la causa del reinicio (`DAQ_REINICIO_*` en
+`daq_protocolo.h`): encendido, MCLR, watchdog o el tipo de trampa. Los
+manejadores de trampas de MCC ejecutan `reset` en compilación de producción;
+`reinicio.c` sustituye `TRAPS_halt_on_error` para guardar el código de la
+trampa en RAM persistente antes del reset.
+
+En Linux el firmware se compila sin MPLAB X con
+`MPLAB/dsPicDaq.X/compilar.sh` (XC-DSC y el pack `dsPIC33CK-MC_DFP`), que
+deja el resultado en `MPLAB/dsPicDaq.hex`.
+
 Antes de integrarlo con Simulink deben verificarse en la tarjeta, con el
 programa de prueba y un analizador lógico:
 
@@ -211,6 +230,17 @@ dsPIC. Mide también la duración de cada transferencia. Por omisión la salida
 analógica permanece en 0 V; la opción `-salida` genera una rampa de ±1 V para
 verificarla con osciloscopio. Las instrucciones de compilación se encuentran
 en el encabezado del archivo.
+
+El programa compila en Windows con libMPSSE-SPI (`compilar.bat`) y en Linux
+con libftdi1 (`make`; en Fedora requiere `libftdi-devel`). El núcleo de la
+prueba (apertura del canal, clasificación de respuestas, contadores y
+registro CSV) está en `herramientas/comun/enlace_prueba.h`, que comparte con
+el visor; `herramientas/comun/mpsse_linux.h` implementa sobre libftdi1 el
+subconjunto de libMPSSE-SPI que se usa en Linux. El FT2232H de la tarjeta
+tiene la EEPROM reprogramada como `2099:0001`; en Linux,
+`herramientas/prueba_enlace/70-daq-spi.rules` da acceso al dispositivo sin
+`sudo`. Con `-registro` se guarda cada trama en un CSV, del que
+`herramientas/reporte/reporte.py` genera un reporte en PDF.
 
 ### Bloque de Simulink
 

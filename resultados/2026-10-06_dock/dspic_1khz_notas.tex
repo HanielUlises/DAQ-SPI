@@ -23,11 +23,13 @@ Reinicios reportados           & 0        & 0 \\
 Las fallas en las fronteras del byte 1 y del byte 7, que se atribuían a
 \texttt{armar\_dma()}, desaparecieron sin modificar el firmware. Como dañaban
 los dos sentidos de la misma transferencia a la vez, el resultado es
-consistente con ruido en SCK o en \texttt{CS} por una diferencia en la
-referencia de tierra entre las dos tarjetas cuando cada una se alimenta de un
-puerto distinto. Sin el analizador lógico no se puede confirmar el
-mecanismo; una corrida con las tarjetas de nuevo en puertos distintos
-indicaría si la conexión es la causa.
+consistente con ruido por la falta de una referencia de tierra común: no
+había cable de GND entre las tarjetas. El hub redujo el ruido pero no lo
+eliminó: con \texttt{visor\_enlace}, que carga más la PC, hubo errores por
+pulsos falsos en \texttt{CS} (\texttt{visor\_dspic\_1khz} de esta
+carpeta), que desaparecieron al conectar el cable de GND
+(\texttt{resultados/2026-10-06\_gnd}).
 
-La única bandera de vigilancia corresponde a la pausa entre la prueba
-anterior y ésta.
+La bandera de vigilancia de la trama 1 corresponde a la pausa entre la
+prueba anterior y ésta. La salida de \texttt{prueba\_enlace} (\texttt{.txt})
+todavía la cuenta; el reporte ya no.

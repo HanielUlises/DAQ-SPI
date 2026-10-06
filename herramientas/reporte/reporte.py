@@ -163,11 +163,14 @@ def analizar(filas, conf):
         if f['res'] in cuenta:
             cuenta[f['res']] += 1
         if f['status'] is not None and f['res'] in ('ok', 'seq'):
+            # Igual que status_contable(): la vigilancia en la trama 1 viene
+            # de la inactividad previa a la prueba.
+            status = f['status'] & ~0x04 if f['k'] == 1 else f['status']
             for bit, clave, _ in STATUS:
-                if f['status'] & bit:
+                if status & bit:
                     cuenta[clave] += 1
-            if f['status'] >> 4:
-                causas[f['status'] >> 4] = causas.get(f['status'] >> 4, 0) + 1
+            if status >> 4:
+                causas[status >> 4] = causas.get(status >> 4, 0) + 1
         acumulado.append(dict(cuenta))
     a['cuenta'] = cuenta
     a['causas'] = causas

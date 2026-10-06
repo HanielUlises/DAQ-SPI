@@ -166,11 +166,12 @@ static unsigned categorias(const Trama &t)
     default: break;
     }
     if (t.status >= 0 && (t.resultado == RES_OK || t.resultado == RES_SEQ)) {
-        if (t.status & DAQ_STATUS_ERR_CRC) c |= 1u << CAT_PIC_CRC;
-        if (t.status & DAQ_STATUS_ERR_INICIO) c |= 1u << CAT_PIC_INICIO;
-        if (t.status & DAQ_STATUS_ERR_LONGITUD) c |= 1u << CAT_PIC_LONGITUD;
-        if (t.status & DAQ_STATUS_VIGILANCIA) c |= 1u << CAT_VIGILANCIA;
-        if (t.status & DAQ_STATUS_REINICIO) c |= 1u << CAT_REINICIO;
+        const uint8_t s = status_contable(&t);
+        if (s & DAQ_STATUS_ERR_CRC) c |= 1u << CAT_PIC_CRC;
+        if (s & DAQ_STATUS_ERR_INICIO) c |= 1u << CAT_PIC_INICIO;
+        if (s & DAQ_STATUS_ERR_LONGITUD) c |= 1u << CAT_PIC_LONGITUD;
+        if (s & DAQ_STATUS_VIGILANCIA) c |= 1u << CAT_VIGILANCIA;
+        if (s & DAQ_STATUS_REINICIO) c |= 1u << CAT_REINICIO;
     }
     return c;
 }

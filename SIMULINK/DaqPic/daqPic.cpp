@@ -241,8 +241,16 @@ static void mdlUpdate(SimStruct *S, int_T tid)
 
     const uint16_t dac = daq_voltaje_a_dac(*ssGetInputPortRealSignal(S, 0));
 
+    /* Entre mdlStart y el primer paso Simulink inicializa el resto del modelo,
+     * y si tarda más de 50 ms expira la vigilancia del dsPIC. La bandera llega
+     * en la respuesta del segundo paso y no indica un error del enlace. */
+    uint8_t errores = kStatusErrores;
+    if (e->paso == 2) {
+        errores &= (uint8_t)~DAQ_STATUS_VIGILANCIA;
+    }
+
     uint8_t status = 0;
-    if (!transferir(e, dac, DAQ_FLAG_SALIDA_HAB, &status) || (status & kStatusErrores)) {
+    if (!transferir(e, dac, DAQ_FLAG_SALIDA_HAB, &status) || (status & errores)) {
         e->errores += 1.0;
     }
 }

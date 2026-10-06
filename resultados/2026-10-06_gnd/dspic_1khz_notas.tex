@@ -1,0 +1,14 @@
+\section{Análisis}
+
+Batería corrida con \texttt{visor\_enlace} después de conectar un cable de
+GND entre la tarjeta del FT2232H y la Curiosity Nano (terminal GND junto a
+RB10), con ambas en un solo hub USB y el mismo firmware que
+\texttt{resultados/2026-10-05\_pll}. Sin el cable, la misma prueba tuvo 25
+respuestas con CRC incorrecto por pulsos falsos en \texttt{CS}
+(\texttt{resultados/2026-10-06\_dock/visor\_dspic\_1khz}); con el cable no
+hubo ningún error en las cuatro pruebas.
+
+Los atrasos son pasos en que la PC no inició la transferencia dentro del
+periodo de 1\,ms; también aparecen en el lazo interno, por lo que dependen
+de la PC y no del enlace. La bandera de vigilancia de la trama 1 viene de la
+inactividad previa a la prueba y no se cuenta.

@@ -1,0 +1,23 @@
+\section{Análisis}
+
+Prueba a 1\,kHz con \texttt{visor\_enlace}, con el FT2232H y la Curiosity
+Nano en un solo hub USB y sin cable de GND entre las tarjetas. Con
+\texttt{prueba\_enlace} en la misma conexión no hubo errores
+(\texttt{dspic\_1khz} de esta carpeta); con el visor, que carga la PC y la
+GPU, hubo 25 respuestas con CRC incorrecto (0.025\,\%), y en la respuesta
+siguiente el dsPIC reportó longitud incorrecta para la misma transferencia.
+
+Las respuestas dañadas muestran la causa. Por ejemplo, se esperaba
+\texttt{5A AD 00 00 00 00 00} y se recibió \texttt{5A B0 05 AA D0 00 00 00}:
+a partir del byte 1 aparece de nuevo el inicio de la respuesta
+(\texttt{5A AD}) recorrido 4 bits. En otras el recorrido es de 3 bits. Sólo
+la interrupción INT1 vuelve a armar la respuesta desde el principio, por lo
+que un pulso falso en \texttt{CS} a mitad de la transferencia se toma como
+fin de trama: la interrupción reinicia SPI1 y rearma el DMA mientras la PC
+sigue transfiriendo. La corrupción empieza en el byte 1 en 13 casos, en el 2
+en uno y en el byte 7 en 11, según el momento del pulso; es el mismo patrón
+de \texttt{resultados/2026-10-05\_pll}.
+
+Con el cable de GND la misma prueba no tuvo errores
+(\texttt{resultados/2026-10-06\_gnd}). La bandera de vigilancia de la trama 1
+viene de la inactividad previa a la prueba y no se cuenta.

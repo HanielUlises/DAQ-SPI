@@ -144,6 +144,17 @@ static inline uint16_t aleatorio(void)
     return (uint16_t)x;
 }
 
+/* Banderas del status de la trama t que cuentan como error. La respuesta a la
+ * segunda trama (k = 1) trae lo que pasó antes de la prueba: la vigilancia
+ * expira siempre que el enlace estuvo inactivo más de 50 ms, por lo que esa
+ * bandera no se cuenta. El registro conserva el status completo. */
+static inline uint8_t status_contable(const Trama *t)
+{
+    uint8_t s = (uint8_t)t->status;
+    if (t->k == 1) s &= (uint8_t)~DAQ_STATUS_VIGILANCIA;
+    return s;
+}
+
 /* Clasifica la respuesta de la trama t (ya con tx, rx, k, t_us y dt_us) y
  * actualiza los contadores. st y n son lo que devolvió SPI_ReadWrite. */
 static inline void prueba_procesar(EstadoPrueba *e, Trama *t, FT_STATUS st, DWORD n, bool lazo)
@@ -189,6 +200,7 @@ static inline void prueba_procesar(EstadoPrueba *e, Trama *t, FT_STATUS st, DWOR
         if (seq_eco != e->seq_anterior) c.err_seq++;
         t->resultado = seq_eco != e->seq_anterior ? RES_SEQ : RES_OK;
         t->status = status;
+        status = status_contable(t);
         if (status & DAQ_STATUS_ERR_CRC) c.pic_crc++;
         if (status & DAQ_STATUS_ERR_INICIO) c.pic_inicio++;
         if (status & DAQ_STATUS_ERR_LONGITUD) c.pic_longitud++;

@@ -54,6 +54,16 @@ salida utilizada es `VOUTA`. Los canales B, C y D no se emplean.
 | SYNC (GPIO) | RB4 | | pin 9 |
 | QEI A / B | RB8 / RB9 | | |
 | LED0 | RD10 | | |
+| GND | GND | GND | GND |
+
+El cable de GND entre la Curiosity Nano (terminal GND junto a RB10) y la
+tarjeta del FT2232H es necesario. Sin él, la única referencia común de las
+señales del SPI es la tierra de los cables USB y aparecen pulsos falsos en
+`CS`: INT1 los toma como fin de trama y rearma la respuesta a mitad de la
+transferencia. Con cada tarjeta en un puerto distinto de la PC fallaba el
+0.7 % de las transferencias (`resultados/2026-10-05_pll`); con ambas en un
+mismo hub, el 0.025 % con `visor_enlace` (`resultados/2026-10-06_dock`). Con
+el cable no hubo errores (`resultados/2026-10-06_gnd`).
 
 ## Protocolo de comunicación
 

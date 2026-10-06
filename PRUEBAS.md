@@ -12,8 +12,10 @@ orden: cada uno supone que el anterior terminó sin errores.
   FT2232H.
 - MATLAB/Simulink con un compilador de C++ configurado para MEX (el mismo con
   el que se compilaron las S-Functions actuales).
-- Conexiones según la tabla del [README](README.md#conexiones). No hay cambios
-  de hardware respecto al firmware actual.
+- Conexiones según la tabla del [README](README.md#conexiones), incluido el
+  cable de GND entre la Curiosity Nano y la tarjeta del FT2232H. Sin ese
+  cable el enlace depende de cómo se conecten los USB: con cada tarjeta en un
+  puerto distinto de la PC, alrededor del 0.7 % de las transferencias falla.
 - Recomendado: analizador lógico con cinco canales y osciloscopio.
 
 **Seguridad.** En los pasos 1 y 2 la salida analógica permanece en 0 V. El
@@ -44,6 +46,10 @@ verifica que el FT2232H opere en modo MPSSE y que cada byte regrese intacto,
 y mide la duración de las transferencias. Con el dsPIC conectado, las mismas
 opciones de los pasos 2 y 3 funcionan igual que en Windows. Los tiempos
 medidos en Linux no sustituyen a los de Windows, porque el driver es otro.
+
+En Linux la Curiosity Nano también se monta como la unidad `CURIOSITY`, por
+lo que el firmware se carga igual que en el paso 1, y
+`MPLAB/dsPicDaq.X/compilar.sh` lo compila con XC-DSC sin MPLAB X.
 
 ## 1. Cargar el firmware
 
@@ -81,8 +87,9 @@ periodo de muestreo mínimo alcanzable.
 | Todas las respuestas con error de encabezado o CRC | Firmware anterior cargado, MISO desconectado o el DMA de transmisión no entrega los bytes |
 | Errores de número de secuencia aislados | El dsPIC no terminó de procesar una trama antes de la siguiente |
 | El dsPIC reporta errores de longitud | `CS` no delimita tramas de 8 bytes (revisar AD3 → RB10) |
+| CRC incorrecto en la PC y, en la respuesta siguiente, longitud incorrecta en el dsPIC | Pulsos falsos en `CS` por falta del cable de GND entre las tarjetas |
 | El dsPIC reporta errores de CRC | Ruido en SCK o MOSI |
-| El dsPIC reporta vigilancia | Pausas de más de 50 ms en la PC; normal si la prueba se interrumpe |
+| El dsPIC reporta vigilancia | Pausas de más de 50 ms en la PC. La que trae la segunda respuesta viene de la inactividad previa a la prueba y no se cuenta |
 
 ### Verificación con analizador lógico
 
@@ -91,8 +98,10 @@ Canales: `CS` (RB10), SCK (RB13), MOSI (RB14), MISO (RB11) y RD10. Verificar:
 1. Cada intervalo con `CS` en bajo contiene exactamente 8 bytes.
 2. MOSI comienza con `A5` y MISO con `5A` en todas las tramas.
 3. El segundo byte de MISO es igual al segundo byte de MOSI de la trama
-   anterior. Esto confirma que el DMA entrega el segundo byte de la respuesta,
-   que es el punto que no pudo verificarse sin hardware.
+   anterior. Esto confirma que el DMA entrega el segundo byte de la respuesta.
+   `prueba_enlace` ya lo comprueba en cada trama (errores de número de
+   secuencia): en `resultados/2026-10-06_dock` no hubo ninguno en 200 000
+   tramas, por lo que este punto no requiere el analizador.
 4. El pulso en RD10 inicia al subir `CS`. Su ancho es la duración de la
    interrupción de fin de trama (se estima en alrededor de 100 µs) y debe ser
    menor que el intervalo mínimo entre tramas.

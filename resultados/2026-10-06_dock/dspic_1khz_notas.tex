@@ -1,0 +1,33 @@
+\section{Análisis}
+
+Mismo firmware que \texttt{resultados/2026-10-05\_pll} ($F_{cy} = 50$\,MHz,
+con reporte de la causa de reinicio); la tarjeta no se reprogramó. El único
+cambio es la conexión USB: el FT2232H y la Curiosity Nano, que antes iban en
+puertos distintos de la PC, ahora comparten un hub conectado a un solo
+puerto.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & Puertos distintos & Un solo hub \\
+\midrule
+CRC incorrecto en la PC        & 0.68\,\% & 0 \\
+Número de secuencia            & 0.73\,\% & 0 \\
+Longitud incorrecta (dsPIC)    & 0.72\,\% & 0 \\
+Reinicios reportados           & 0        & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las fallas en las fronteras del byte 1 y del byte 7, que se atribuían a
+\texttt{armar\_dma()}, desaparecieron sin modificar el firmware. Como dañaban
+los dos sentidos de la misma transferencia a la vez, el resultado es
+consistente con ruido en SCK o en \texttt{CS} por una diferencia en la
+referencia de tierra entre las dos tarjetas cuando cada una se alimenta de un
+puerto distinto. Sin el analizador lógico no se puede confirmar el
+mecanismo; una corrida con las tarjetas de nuevo en puertos distintos
+indicaría si la conexión es la causa.
+
+La única bandera de vigilancia corresponde a la pausa entre la prueba
+anterior y ésta.

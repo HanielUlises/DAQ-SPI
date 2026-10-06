@@ -5,11 +5,13 @@ on:
     paths:
       - 'protocolo/**'
       - 'herramientas/**'
+      - 'SIMULINK/DaqPic/**'
       - '.github/workflows/pruebas.yml'
   pull_request:
     paths:
       - 'protocolo/**'
       - 'herramientas/**'
+      - 'SIMULINK/DaqPic/**'
       - '.github/workflows/pruebas.yml'
 
 jobs:
@@ -38,3 +40,5 @@ jobs:
         run: make -C herramientas/visor_enlace CXX=${{ matrix.cxx }}
       - name: Pruebas de bits.h (sin hardware)
         run: make -C herramientas/visor_enlace prueba CXX=${{ matrix.cxx }}
+      - name: S-Functions de Simulink (arnés, sólo compilación)
+        run: make -C herramientas/arnes_simulink CXX=${{ matrix.cxx }}

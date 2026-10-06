@@ -82,3 +82,7 @@ herramientas/visor_enlace/visor_enlace
 herramientas/visor_enlace/prueba_bits
 herramientas/visor_enlace/obj/
 resultados/**/*.ppm
+
+# Arnés de las S-Functions
+herramientas/arnes_simulink/arnes
+herramientas/arnes_simulink/obj/

@@ -123,8 +123,9 @@ En MATLAB:
 
 ```matlab
 cd SIMULINK/DaqPic
-compilar        % genera daqPic.mexw64
-crear_modelo    % genera y abre DaqPicPrueba.slx
+compilar                % genera daqPic, daqPicInicio, daqPicEscribir y daqPicLeer
+crear_modelo            % genera y abre DaqPicPrueba.slx (un bloque)
+crear_modelo_bloques    % genera y abre DaqPicBloquesPrueba.slx (tres bloques)
 ```
 
 Ejecutar el modelo (10 s). La posición debe seguir a la senoidal aplicada, y
@@ -137,6 +138,12 @@ posición, los errores de comunicación y los pasos atrasados. No requiere
 `initializePic` y no debe combinarse con los bloques anteriores en el mismo
 modelo. La posición se entrega con un retardo de dos periodos respecto al
 voltaje aplicado, lo que debe considerarse en el diseño del controlador.
+
+`DaqPicBloquesPrueba.slx` es el mismo modelo con `daqPicInicio`,
+`daqPicEscribir` y `daqPicLeer` (ver el README); se ejecuta igual y sus
+indicadores también deben permanecer en 0. Antes de pasar a Windows, los
+cuatro bloques pueden probarse en Linux con
+`make -C herramientas/arnes_simulink correr`.
 
 ## Regresar al firmware anterior
 

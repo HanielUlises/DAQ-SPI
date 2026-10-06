@@ -9,7 +9,8 @@
  * Por omisión la salida analógica queda deshabilitada (0 V) aunque el campo
  * del DAC varía, de modo que se ejercita el protocolo sin mover el motor. Con
  * -salida se envía una rampa triangular de +/-1 V para verificarla con
- * osciloscopio.
+ * osciloscopio. Con -voltaje V la salida se mantiene en V volts durante toda
+ * la prueba, para medirla con multímetro.
  *
  * Compilación en Windows (x64 Native Tools Command Prompt de Visual Studio):
  *   compilar.bat
@@ -28,8 +29,8 @@
  *
  * -reloj cambia la frecuencia de SCK (por omisión 1 MHz, la de daqPic).
  *
- * Uso: prueba_enlace [-n tramas] [-periodo us] [-reloj Hz] [-salida] [-lazo]
- *                    [-registro archivo.csv]
+ * Uso: prueba_enlace [-n tramas] [-periodo us] [-reloj Hz] [-salida | -voltaje V]
+ *                    [-lazo] [-registro archivo.csv]
  */
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +68,8 @@ int main(int argc, char **argv)
     double periodo_us = 0.0;
     DWORD reloj = 1000000;
     bool salida = false;
+    bool fijo = false;
+    double voltaje = 0.0;
     bool lazo = false;
     const char *ruta_registro = NULL;
 
@@ -79,6 +82,10 @@ int main(int argc, char **argv)
             reloj = (DWORD)strtoul(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-salida")) {
             salida = true;
+        } else if (!strcmp(argv[i], "-voltaje") && i + 1 < argc) {
+            salida = true;
+            fijo = true;
+            voltaje = atof(argv[++i]);
         } else if (!strcmp(argv[i], "-registro") && i + 1 < argc) {
             ruta_registro = argv[++i];
 #ifndef _WIN32
@@ -86,7 +93,7 @@ int main(int argc, char **argv)
             lazo = true;
 #endif
         } else {
-            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-reloj Hz] [-salida]%s"
+            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-reloj Hz] [-salida | -voltaje V]%s"
                             " [-registro archivo.csv]\n", argv[0],
 #ifdef _WIN32
                     "");
@@ -125,10 +132,18 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    char texto_salida[48];
+    if (fijo) {
+        snprintf(texto_salida, sizeof texto_salida, "fija en %+.3f V (código %u)", voltaje,
+                 (unsigned)daq_voltaje_a_dac(voltaje));
+    } else {
+        snprintf(texto_salida, sizeof texto_salida, "%s",
+                 salida ? "rampa +/-1 V" : "deshabilitada (0 V)");
+    }
     printf("Tramas: %lu, SCK: %lu kHz, periodo: %s, salida: %s%s\n", total,
            (unsigned long)(reloj / 1000u),
            periodo_us > 0.0 ? "fijo" : "lo más rápido posible",
-           salida ? "rampa +/-1 V" : "deshabilitada (0 V)",
+           texto_salida,
            lazo ? ", lazo interno MOSI -> MISO (sin dsPIC)" : "");
 
     EstadoPrueba e;
@@ -140,7 +155,7 @@ int main(int argc, char **argv)
 
     for (unsigned long k = 0; k < total && !detener; k++) {
         Trama t;
-        const uint16_t dac = salida ? rampa(k) : aleatorio();
+        const uint16_t dac = fijo ? daq_voltaje_a_dac(voltaje) : salida ? rampa(k) : aleatorio();
         const uint8_t flags = salida ? DAQ_FLAG_SALIDA_HAB : 0u;
         DWORD n = 0;
 

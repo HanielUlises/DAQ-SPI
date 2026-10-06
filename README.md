@@ -271,5 +271,36 @@ la PC. La transferencia se realiza en la actualización del bloque, con el
 voltaje del paso actual, y la posición recibida se entrega en el paso
 siguiente. Así el bloque no tiene transmisión directa y puede emplearse en
 lazo cerrado sin generar lazos algebraicos; el retardo total del lazo es de
-dos periodos. `compilar.m` genera el archivo MEX y `crear_modelo.m` construye
-un modelo de prueba.
+dos periodos. `compilar.m` genera los archivos MEX y `crear_modelo.m`
+construye un modelo de prueba.
+
+#### Versión en tres bloques
+
+Para los modelos que separan la inicialización, la escritura y la lectura,
+como los anteriores, la misma carpeta contiene `daqPicInicio`,
+`daqPicEscribir` y `daqPicLeer`. Conservan la regla de una sola transferencia
+por paso: sólo `daqPicInicio` usa el FT2232H, y en su actualización transfiere
+el voltaje que `daqPicEscribir` dejó en el paso y guarda la posición que
+entrega `daqPicLeer`. Como Simulink calcula las salidas de todos los bloques
+antes de cualquier actualización, el orden entre los bloques no importa. El
+estado compartido viaja por la señal *llave* de `daqPicInicio`
+(`daq_bloques.h`).
+
+| Bloque | Parámetros | Entradas | Salidas |
+|---|---|---|---|
+| `daqPicInicio` | periodo de muestreo, tiempo real (0/1) | — | llave |
+| `daqPicEscribir` | — | llave; voltaje [V] | — |
+| `daqPicLeer` | — | llave | posición, errores, atrasos |
+
+El voltaje se envía en cada paso, aunque no cambie, y sin `daqPicEscribir` la
+salida queda deshabilitada. La posición tiene el mismo retardo de dos periodos
+que con `daqPic`. `crear_modelo_bloques.m` construye el modelo de prueba
+equivalente. Ninguna de las dos versiones debe combinarse con la otra ni con
+los bloques anteriores en el mismo modelo.
+
+`herramientas/arnes_simulink` ejecuta los cuatro bloques en Linux, sin MATLAB,
+contra la tarjeta: los llama en el orden de Simulink, con una pausa de 300 ms
+antes del primer paso, y verifica puertos, periodos, llaves inválidas, el
+voltaje de cada paso, la ausencia de errores y de atrasos por la
+inicialización, y la liberación del estado (`make -C herramientas/arnes_simulink
+correr`).

@@ -77,6 +77,16 @@ static void prueba_bloques(int pasos, bool con_escritura)
     sfun_daqPicLeer.salidas(&Sl, 0);
     revisar(Sl.error != NULL, "Leer rechaza una llave que no viene de Inicio");
     Se.error = Sl.error = NULL;
+    /* Una constante entera conectada por error no debe leerse como dirección */
+    const double constantes[] = {1.0, 3.0, 1000.0, 0.5, -8.0, 1e300};
+    bool rechazadas = true;
+    for (double c : constantes) {
+        Se.in[0][0] = c;
+        sfun_daqPicEscribir.salidas(&Se, 0);
+        rechazadas = rechazadas && Se.error != NULL;
+        Se.error = NULL;
+    }
+    revisar(rechazadas, "Escribir rechaza constantes (1, 3, 1000, 0.5, -8, 1e300) sin leerlas");
 
     sfun_daqPicInicio.inicio(&Si);
     revisar(Si.error == NULL, Si.error ? Si.error : "mdlStart sin error");

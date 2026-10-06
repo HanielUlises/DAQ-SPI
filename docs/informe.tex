@@ -28,7 +28,40 @@
   lab/.style    = {font=\scriptsize, midway, above},
   note/.style   = {font=\scriptsize\itshape, align=center},
   rowlab/.style = {font=\footnotesize, anchor=east},
+  % Diagramas de Simulink
+  simblk/.style  = {draw=black!80, semithick, fill=white},
+  simname/.style = {font=\scriptsize, anchor=north, inner sep=2pt},
+  sgl/.style     = {font=\scriptsize, above, inner sep=1.5pt},
+  wire/.style    = {-{Triangle[length=1.5mm, width=1.3mm]}, semithick},
 }
+
+% Bloques de Simulink en las coordenadas del modelo (píxeles, eje y hacia
+% abajo): {izquierda}{arriba}{derecha}{abajo}{nombre}
+\newcommand{\simmarco}[4]{%
+  \fill[black!30] ({#1+2},{#2+2}) rectangle ({#3+2},{#4+2});
+  \draw[simblk] (#1,#2) rectangle (#3,#4);}
+\newcommand{\simnombre}[4]{\node[simname] at ({(#1+#3)/2},{#4+2}) {#2};}
+\newcommand{\simsfun}[5]{%
+  \simmarco{#1}{#2}{#3}{#4}
+  \node[font=\scriptsize\ttfamily] at ({(#1+#3)/2},{(#2+#4)/2}) {#5};
+  \simnombre{#1}{#5}{#3}{#4}}
+\newcommand{\simseno}[5]{%
+  \simmarco{#1}{#2}{#3}{#4}
+  \draw[semithick, shift={({(#1+#3)/2},{(#2+#4)/2})}]
+    plot[domain=-18:18, samples=37, smooth] (\x, {-9*sin(10*\x)});
+  \simnombre{#1}{#5}{#3}{#4}}
+\newcommand{\simscope}[5]{%
+  \simmarco{#1}{#2}{#3}{#4}
+  \draw[fill=black!10] ({#1+6},{#2+8}) rectangle ({#3-6},{#2+36});
+  \draw[shift={({(#1+#3)/2},{#2+22})}]
+    plot[domain=-12:12, samples=25, smooth] (\x, {-8*sin(15*\x)});
+  \foreach \k in {-8,0,8} \draw ({(#1+#3)/2+\k},{#4-12}) circle (2.5);
+  \simnombre{#1}{#5}{#3}{#4}}
+\newcommand{\simdisplay}[5]{%
+  \simmarco{#1}{#2}{#3}{#4}
+  \node[font=\scriptsize\ttfamily, anchor=east, inner sep=0pt]
+    at ({#3-6},{(#2+#4)/2}) {0};
+  \simnombre{#1}{#5}{#3}{#4}}
 
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\us}{\,$\mu$s}
@@ -62,9 +95,12 @@ señal \code{CS} causados por la ausencia de una tierra común entre las
 tarjetas. Con un cable de GND entre
 la Curiosity Nano y el FT2232H, las cuatro pruebas de 100\,000 tramas
 concluyeron sin errores. La salida analógica respondió a una rampa de
-$\pm 1$\,V sin errores de comunicación; queda pendiente su verificación con
-osciloscopio, la conexión del motor y del encoder, y la validación del
-bloque de Simulink.
+$\pm 1$\,V sin errores de comunicación. Los bloques de Simulink, en una
+versión de un bloque y otra de tres, se probaron contra la tarjeta con un
+arnés que reproduce en Linux la secuencia de llamadas de Simulink, sin
+errores en 10\,000 pasos. Quedan pendientes la verificación de la salida con
+osciloscopio, la conexión del motor y del encoder, y la ejecución de los
+bloques en Simulink.
 \end{abstract}
 
 \tableofcontents
@@ -101,7 +137,8 @@ modo que el motor quedaba energizado.
   no dependa de la CPU.
 \item Disponer de herramientas que permitan medir el enlace sin Simulink,
   con un criterio de aceptación de cero errores en al menos 100\,000 tramas.
-\item Sustituir las tres S-Functions por un solo bloque de Simulink.
+\item Sustituir las tres S-Functions por bloques que realicen una sola
+  transferencia por paso.
 \item Validar la salida analógica y la lectura del encoder con el motor.
 \end{enumerate}
 
@@ -120,7 +157,7 @@ Etapa & Alcance & Estado \\
 1. Firmware & \code{dsPicDaq}: SPI1 con DMA, PLL, vigilancia, causa de reinicio & Concluida \\
 2. Prueba del enlace & \code{prueba\_enlace}, visor, reportes; 100\,000 tramas sin errores & Concluida \\
 3. Salida analógica & Rampa de $\pm1$\,V enviada sin errores; falta osciloscopio & En curso \\
-4. Simulink & S-Function \code{daqPic} escrita; falta compilarla y probarla en Windows & Pendiente \\
+4. Simulink & \code{daqPic} y versión en tres bloques probadas con un arnés en Linux; falta Windows & En curso \\
 5. Pruebas con el motor & Motor y encoder identificados; falta etapa de potencia & Pendiente \\
 \bottomrule
 \end{tabularx}
@@ -351,6 +388,8 @@ libMPSSE-SPI que se utiliza. Sus opciones principales son:
   \code{-reloj}: frecuencia de SCK.
 \item \code{-salida}: genera una rampa triangular de $\pm1$\,V con periodo de
   2000 tramas. Sin esta opción la salida permanece en 0\,V.
+\item \code{-voltaje V}: mantiene la salida en \code{V} volts durante toda la
+  prueba, para medirla con multímetro.
 \item \code{-lazo} (sólo Linux): une MOSI con MISO dentro del FT2232H para
   probar el puente sin el dsPIC.
 \item \code{-registro}: guarda en un archivo CSV los tiempos, los bytes
@@ -385,17 +424,234 @@ cuatro pruebas de referencia (lazo interno y dsPIC, cada una lo más rápido
 posible y a 1\,kHz, con 100\,000 tramas) con \code{prueba\_enlace} o con el
 visor, y genera los reportes en \code{resultados/<fecha>\_<herramienta>/}.
 
-\subsection{Bloque de Simulink}
+% ===========================================================================
+\section{Bloques de Simulink}
+\label{sec:simulink}
 
-\code{SIMULINK/DaqPic/daqPic.cpp} es una S-Function que sustituye a
-\code{initializePic}, \code{leerPic} y \code{escribirPic}. Abre el FT2232H,
-ejecuta una transferencia por paso en \code{mdlUpdate}, se sincroniza con el
-reloj de la PC, cuenta los errores de comunicación y los pasos atrasados, y
-al terminar deja la salida en 0\,V. No tiene transmisión directa, por lo que
-puede usarse en lazo cerrado sin lazos algebraicos; la posición se entrega
-con un retardo de dos periodos. Al iniciar envía dos tramas: la primera pone
-en cero el encoder y la segunda verifica que el dsPIC responda con el
-protocolo nuevo.
+Se escribieron dos versiones de los bloques que sustituyen a
+\code{initializePic}, \code{leerPic} y \code{escribirPic}: \code{daqPic},
+que reúne la comunicación en un solo bloque, y la combinación de
+\code{daqPicInicio}, \code{daqPicEscribir} y \code{daqPicLeer}, que conserva
+la división en tres bloques de la versión anterior. Ambas son S-Functions de
+nivel~2 en C++, se encuentran en \code{SIMULINK/DaqPic}, se compilan con
+\code{compilar.m} y producen en el enlace la misma secuencia de tramas: una
+transferencia full-duplex de ocho bytes por paso.
+
+Las figuras~\ref{fig:sim-uno} y~\ref{fig:sim-tres} muestran los modelos de
+prueba que generan \code{crear\_modelo.m} y \code{crear\_modelo\_bloques.m},
+dibujados con las posiciones de los bloques en el modelo. En ambos, una onda
+senoidal de 0.5\,V y 0.5\,Hz se aplica a la salida durante 10\,s con
+$T_s = 1$\,ms; el Scope muestra el voltaje y la posición del encoder, y los
+Display, los contadores de errores de comunicación y de pasos atrasados, que
+deben permanecer en cero.
+
+\subsection{Diferencias con los bloques anteriores}
+
+En la versión anterior, \code{initializePic} abría el canal SPI y compartía
+su \emph{handle}, protegido por un mutex, con \code{escribirPic} y
+\code{leerPic}. Cada uno de estos ejecutaba su propia operación sobre el bus
+(\code{SPI\_Write} y \code{SPI\_Read}), de modo que en cada paso había dos
+transacciones independientes. Además, \code{escribirPic} omitía el envío
+cuando el valor del DAC no había cambiado: si una escritura se perdía, el
+dsPIC conservaba el valor anterior hasta que la señal cambiara, y con una
+entrada constante el error se volvía permanente.
+
+En las dos versiones nuevas un solo bloque usa el FT2232H y ejecuta una sola
+transferencia por paso, por lo que el mutex deja de ser necesario. El voltaje
+se envía en cada paso aunque no cambie, de modo que una trama dañada sólo
+afecta un periodo.
+
+\subsection{Versión en un bloque: \code{daqPic}}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.3mm, y=-0.3mm]
+  \simseno{40}{95}{90}{125}{Voltaje}
+  \simsfun{180}{85}{280}{135}{daqPic}
+  \simscope{400}{40}{440}{100}{Voltaje y posicion}
+  \simdisplay{400}{125}{480}{145}{Errores}
+  \simdisplay{400}{165}{480}{185}{Atrasos}
+
+  \draw[wire] (90,110) -- node[sgl] {voltaje} (135,110) -- (180,110);
+  \draw[wire] (135,110) -- (135,60) -- (400,60);
+  \fill (135,110) circle (1.6pt);
+  \draw[wire] (280,97.5) -- node[sgl] {posición} (340,97.5) -- (340,80)
+    -- (400,80);
+  \draw[wire] (280,110) -- (360,110) -- (360,135) -- (400,135);
+  \draw[wire] (280,122.5) -- (330,122.5) -- (330,175) -- (400,175);
+\end{tikzpicture}
+\caption{Modelo \code{DaqPicPrueba} (\code{crear\_modelo.m}) con la versión
+en un bloque. Parámetros de \code{daqPic}: \code{0.001, 1}. Salidas, de
+arriba abajo: posición [cuentas], errores de comunicación y pasos
+atrasados.}
+\label{fig:sim-uno}
+\end{figure}
+
+\code{daqPic} recibe el voltaje de salida en volts, saturado a
+$[-2.5, 2.5]$, y entrega la posición del encoder en cuentas, relativa al
+inicio de la simulación, el número acumulado de errores de comunicación y el
+número de pasos atrasados respecto al tiempo real. Sus parámetros son el
+periodo de muestreo en segundos y un indicador (0 o 1) para sincronizar la
+simulación con el reloj de la PC.
+
+En \code{mdlStart} el bloque abre el FT2232H y envía dos tramas: la primera
+pone en cero el encoder y la segunda verifica que el dsPIC responda con el
+protocolo nuevo; si no es así, la simulación se detiene con un mensaje de
+error. En cada paso, \code{mdlUpdate} espera el instante que le corresponde
+según el reloj de la PC, ejecuta la transferencia con el voltaje del paso y
+actualiza los contadores. Un paso que llega con más de un periodo de atraso
+se cuenta en \code{Atrasos} y se toma como nueva referencia, sin intentar
+recuperar en ráfaga los pasos perdidos. \code{mdlOutputs} entrega los
+valores recibidos en el paso anterior, de modo que el bloque no tiene
+transmisión directa y puede cerrarse un lazo de control sin lazos
+algebraicos.
+
+El origen del reloj de tiempo real se toma ahora en el primer paso y no en
+\code{mdlStart}. Entre ambos momentos Simulink inicializa el resto del
+modelo; antes de esta corrección ese intervalo se contaba como atraso, y
+\code{Atrasos} comenzaba en~1 siempre que la inicialización tardara más de
+un periodo.
+
+\subsection{Versión en tres bloques}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.3mm, y=-0.3mm]
+  \simseno{40}{85}{90}{115}{Voltaje}
+  \simsfun{40}{200}{140}{240}{daqPicInicio}
+  \simsfun{240}{80}{340}{130}{daqPicEscribir}
+  \simsfun{240}{195}{340}{245}{daqPicLeer}
+  \simscope{460}{40}{500}{100}{Voltaje y posicion}
+  \simdisplay{460}{210}{540}{230}{Errores}
+  \simdisplay{460}{250}{540}{270}{Atrasos}
+
+  % llave
+  \draw[wire] (140,220) -- node[sgl] {llave} (190,220) -- (240,220);
+  \draw[wire] (190,220) -- (190,96.67) -- (240,96.67);
+  \fill (190,220) circle (1.6pt);
+  % voltaje, con un salto sobre la llave
+  \draw[wire] (90,100) -- (165,100) -- (165,113.33) -- (184,113.33)
+    .. controls (184,104) and (196,104) .. (196,113.33) -- (240,113.33);
+  \node[sgl] at (140,100) {voltaje};
+  \draw[wire] (115,100) -- (115,60) -- (460,60);
+  \fill (115,100) circle (1.6pt);
+  % salidas de daqPicLeer
+  \draw[wire] (340,207.5) -- node[sgl] {posición} (400,207.5) -- (400,80)
+    -- (460,80);
+  \draw[wire] (340,220) -- (460,220);
+  \draw[wire] (340,232.5) -- (420,232.5) -- (420,260) -- (460,260);
+\end{tikzpicture}
+\caption{Modelo \code{DaqPicBloquesPrueba} (\code{crear\_modelo\_bloques.m})
+con la versión en tres bloques. Parámetros de \code{daqPicInicio}:
+\code{0.001, 1}; \code{daqPicEscribir} y \code{daqPicLeer} no tienen
+parámetros y heredan el periodo de muestreo. Entradas de
+\code{daqPicEscribir}: llave y voltaje; salidas de \code{daqPicLeer}: las
+mismas de \code{daqPic}.}
+\label{fig:sim-tres}
+\end{figure}
+
+\code{daqPicInicio} tiene los mismos parámetros que \code{daqPic}, no tiene
+entradas y entrega una señal, la \emph{llave}, que se conecta a la primera
+entrada de \code{daqPicEscribir} y de \code{daqPicLeer}.
+\code{daqPicEscribir} recibe además el voltaje y no tiene salidas;
+\code{daqPicLeer} entrega la posición, los errores y los atrasos, con el
+mismo significado que en \code{daqPic}. Como \code{daqPicInicio} no tiene
+entradas y \code{daqPicEscribir} no tiene salidas, esta versión también
+admite un lazo cerrado sin lazos algebraicos.
+
+Sólo \code{daqPicInicio} usa el FT2232H. En su \code{mdlUpdate} ejecuta la
+transferencia del paso con el voltaje que \code{daqPicEscribir} dejó en un
+estado compartido durante su \code{mdlOutputs}, y guarda en el mismo estado
+la posición, que \code{daqPicLeer} entrega en el paso siguiente. Simulink
+ejecuta los \code{mdlOutputs} de todos los bloques antes que cualquier
+\code{mdlUpdate}, de modo que el voltaje del paso ya está escrito cuando se
+realiza la transferencia, sin importar el orden en que se ejecuten los
+bloques.
+
+Cada S-Function es un archivo MEX distinto y no comparte variables con las
+demás, por lo que el estado compartido viaja por la llave: su dirección en
+memoria expresada como \code{double}. En Windows x64 las direcciones de
+usuario ocupan 47 bits y la mantisa de un \code{double} tiene 53, de modo
+que la dirección se representa sin pérdida; \code{daqPicInicio} lo verifica
+al arrancar. El estado comienza con una marca fija (\code{0x44415150},
+``DAQP''). Antes de leer el estado, \code{daqPicEscribir} y
+\code{daqPicLeer} comprueban que la llave sea un entero entre $2^{16}$ y
+$2^{47}$ (Windows nunca asigna los primeros 64\,KB, y $2^{47}$ es el límite
+de las direcciones de usuario), alineado como el estado, y que apunte a
+memoria comprometida y legible según \code{VirtualQuery}; sólo entonces
+comparan la marca. Si alguna condición no se cumple, es decir, si la entrada
+no proviene de \code{daqPicInicio}, detienen la simulación con un mensaje de
+error. Así, una constante u otra señal conectada por equivocación a la
+entrada de la llave no se lee como dirección y no cierra MATLAB. Si el modelo no incluye \code{daqPicEscribir}, la
+salida permanece deshabilitada (0\,V).
+
+\subsection{Características comunes}
+
+\begin{itemize}
+\item La posición llega con un retardo de dos periodos: la respuesta a cada
+  trama contiene la posición que el dsPIC leyó al terminar la trama
+  anterior, y el valor recibido en \code{mdlUpdate} aparece en las salidas
+  en el paso siguiente.
+\item Al terminar la simulación se envía una trama con la salida
+  deshabilitada, de modo que el DAC queda en 0\,V.
+\item Requieren el firmware \code{dsPicDaq}.
+\item No deben combinarse entre sí ni con \code{initializePic},
+  \code{leerPic} o \code{escribirPic} en un mismo modelo, ya que cada
+  versión abre el FT2232H por su cuenta.
+\end{itemize}
+
+\subsection{Prueba con un arnés en Linux}
+
+Ninguna de las dos versiones se ha compilado todavía con \code{mex} ni se ha
+ejecutado en Simulink. Para probarlas sin MATLAB se escribió
+\code{herramientas/arnes\_simulink}, que compila las cuatro S-Functions en
+Linux con imitaciones de \code{simstruc.h}, \code{windows.h} y
+libMPSSE-SPI (esta última sobre libftdi1) y las ejecuta contra la tarjeta
+en el orden en que lo hace Simulink: \code{mdlInitializeSizes},
+\code{mdlInitializeSampleTimes}, \code{mdlStart}, una pausa de 300\,ms que
+representa la inicialización del resto del modelo, en cada paso todos los
+\code{mdlOutputs} seguidos de los \code{mdlUpdate} y, al final,
+\code{mdlTerminate}. En la versión de tres bloques, \code{daqPicEscribir} y
+\code{daqPicLeer} se llaman en orden alterno de un paso al siguiente, para
+comprobar que el orden no importa. El arnés se compila también en la
+integración continua, con g++ y clang++.
+
+La tabla~\ref{tab:arnes} resume las corridas del 6 de octubre de 2026, a
+1\,kHz, con la onda senoidal de 0.5\,V y el motor sin conectar. Las 26
+comprobaciones del arnés resultaron correctas: la pausa inicial no se contó
+como atraso, ni la bandera de vigilancia que provoca se contó como error; en
+la versión de tres bloques, el voltaje de cada paso llegó al estado
+compartido antes de la transferencia, y \code{daqPicEscribir} y
+\code{daqPicLeer} rechazaron una llave igual a cero y una que no provenía de
+\code{daqPicInicio}. Una comprobación posterior, que no requiere la tarjeta,
+verifica que \code{daqPicEscribir} rechaza sin leerlas las llaves 1, 3,
+1000, 0.5, $-8$ y $10^{300}$; fuera de Windows no existe
+\code{VirtualQuery}, por lo que el arnés sólo ejercita las comprobaciones de
+intervalo y alineación. Los atrasos se deben a la variación en la planificación
+de procesos de Linux y no a la comunicación. La versión de \code{daqPic.cpp}
+anterior a la corrección del origen del reloj (commit \code{1b8b3d2}) no pasa
+la comprobación de atrasos, porque contaba la pausa como atraso.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lrrrX@{}}
+\toprule
+Bloques & Pasos & Errores & Atrasos & Observaciones \\
+\midrule
+\code{daqPic} & 10\,000 & 0 & 37 & \\
+Inicio, Escribir y Leer & 10\,000 & 0 & 14 & Escribir y Leer en orden alterno \\
+Inicio y Leer & 1\,000 & 0 & 5 & Salida deshabilitada \\
+\bottomrule
+\end{tabularx}
+\caption{Resultados del arnés de las S-Functions contra la tarjeta (Linux,
+1\,kHz, motor sin conectar).}
+\label{tab:arnes}
+\end{table}
+
+Falta compilar las S-Functions con \code{mex}, ejecutar los dos modelos de
+prueba en Simulink y verificar que \code{Errores} y \code{Atrasos} terminen
+en cero.
 
 % ===========================================================================
 \section{Metodología de prueba}
@@ -687,7 +943,8 @@ simulación, intervalo en el que Simulink inicializa el resto del modelo y que
 puede rebasar 50\,ms. El bloque ignora ahora la vigilancia en la respuesta del
 segundo paso; sin este cambio, el indicador \code{Errores} comenzaría en~1 y
 la prueba del paso~4 no podría cumplir el criterio de aceptación. El cambio
-no se ha compilado, porque requiere MATLAB en Windows.
+se comprobó con el arnés de la sección~\ref{sec:simulink}; falta compilarlo
+en Windows.
 
 \subsection{Documentación}
 
@@ -785,8 +1042,9 @@ consideran los puntos siguientes:
 \item Confirmar la distribución del conector del encoder y los niveles
   admisibles en RB8 y RB9; probar el encoder girando el eje a mano con el
   visor.
-\item Compilar \code{daqPic} en Windows, ejecutar el modelo de prueba y
-  verificar que \code{Errores} y \code{Atrasos} terminen en cero.
+\item Compilar las S-Functions en Windows con \code{compilar.m}, ejecutar
+  los modelos \code{DaqPicPrueba} y \code{DaqPicBloquesPrueba} y verificar
+  que \code{Errores} y \code{Atrasos} terminen en cero.
 \item Repetir la medición de tiempos en Windows con la PC sin carga
   adicional, para fijar el periodo de muestreo mínimo.
 \item Medir con analizador lógico la duración de la interrupción de fin de
@@ -820,6 +1078,8 @@ Fecha & Commit & Descripción \\
 2026-10-05 & \code{3099948} & Resultados con PLL y con el visor. \\
 2026-10-06 & \code{8cdfc55} & Resultados con ambas tarjetas en un hub. \\
 2026-10-06 & \code{1b8b3d2} & Cable de GND, diagnóstico de los pulsos en \code{CS} y vigilancia inicial. \\
+2026-10-06 & \code{c4db2a0} & Informe técnico de avance. \\
+2026-10-06 & \code{2a9ef6a} & Versión en tres bloques de \code{daqPic}, corrección del origen del reloj y arnés de las S-Functions. \\
 \bottomrule
 \end{longtable}
 

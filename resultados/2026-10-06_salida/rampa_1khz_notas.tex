@@ -1,0 +1,15 @@
+\section{Análisis}
+
+Paso~3 del procedimiento: 10\,000 tramas a 1\,kHz con una rampa triangular de
+$\pm1$\,V (códigos 19\,660 a 45\,874) y la salida habilitada en todas las
+tramas. El enlace no tuvo errores y la prueba terminó con la trama de 0\,V.
+La posición del encoder permaneció en cero porque el motor no estaba
+conectado.
+
+Esta prueba valida sólo el enlace con el dsPIC, no la salida analógica. Al
+revisar el cableado después de la prueba se encontró que dos de las tres
+señales del DAC8554 no iban a los pines que usa el firmware: DIN (terminal
+11 del PA0017C) estaba en RB7 en lugar de RB2 (SDO2), y SYNC (terminal 9)
+en un pin vecino de RB4. Con esas conexiones el DAC no recibió las
+escrituras. La salida debe verificarse de nuevo, con el cableado corregido,
+midiendo \texttt{VOUTA} con \texttt{prueba\_enlace -voltaje}.

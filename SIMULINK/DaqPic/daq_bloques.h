@@ -23,6 +23,13 @@
 #include <stdint.h>
 #include "../../protocolo/daq_protocolo.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #define DAQ_BLOQUES_MAGIA 0x44415150u   /* "DAQP" */
 
 struct EstadoDaq {
@@ -43,14 +50,43 @@ static inline double daq_llave(const EstadoDaq *e)
     return (double)(uintptr_t)e;
 }
 
+/* Indica si se pueden leer n bytes a partir de p. En Windows lo consulta con
+ * VirtualQuery; fuera de Windows (el arnés de herramientas/arnes_simulink) se
+ * confía en las comprobaciones de daq_estado. */
+static inline bool daq_legible(const void *p, size_t n)
+{
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION mbi;
+    const DWORD lectura = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                          PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                          PAGE_EXECUTE_WRITECOPY;
+    if (VirtualQuery(p, &mbi, sizeof mbi) == 0 || mbi.State != MEM_COMMIT ||
+        !(mbi.Protect & lectura) || (mbi.Protect & PAGE_GUARD)) {
+        return false;
+    }
+    return (const char *)p + n <= (const char *)mbi.BaseAddress + mbi.RegionSize;
+#else
+    (void)p;
+    (void)n;
+    return true;
+#endif
+}
+
 /* Devuelve el estado que indica la llave, o NULL si la señal no viene de
- * daqPicInicio. */
+ * daqPicInicio. Una llave equivocada (una constante, otra señal) no se lee:
+ * debe ser un entero de 47 bits, alineado, fuera de los primeros 64 KB (que
+ * Windows nunca asigna) y apuntar a memoria legible con la marca. */
 static inline EstadoDaq *daq_estado(double llave)
 {
-    if (!(llave > 0.0) || llave != (double)(uintptr_t)llave) {
+    if (!(llave >= 65536.0 && llave < 140737488355328.0) ||   /* [2^16, 2^47) */
+        llave != (double)(uintptr_t)llave) {
         return NULL;
     }
-    EstadoDaq *e = (EstadoDaq *)(uintptr_t)llave;
+    const uintptr_t dir = (uintptr_t)llave;
+    if (dir % alignof(EstadoDaq) != 0 || !daq_legible((const void *)dir, sizeof(EstadoDaq))) {
+        return NULL;
+    }
+    EstadoDaq *e = (EstadoDaq *)dir;
     return e->magia == DAQ_BLOQUES_MAGIA ? e : NULL;
 }
 

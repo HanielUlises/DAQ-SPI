@@ -4,7 +4,8 @@
 # terceros/ y se compilan aquí.
 #
 #   make            compila visor_enlace
-#   make prueba     compila y ejecuta las pruebas de bits.h (sin hardware)
+#   make prueba     compila y ejecuta las pruebas de bits.h y del modelo
+#                   (PID, exportación, lazo cerrado con el simulador; sin hardware)
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
@@ -22,12 +23,12 @@ TERCEROS = $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp $(IMGUI)/imgui_tables.cpp 
            $(IMGUI)/backends/imgui_impl_opengl3.cpp $(IMPLOT)/implot.cpp $(IMPLOT)/implot_items.cpp
 OBJ_TERCEROS = $(patsubst %.cpp,obj/%.o,$(notdir $(TERCEROS)))
 
-ENCABEZADOS = adquisicion.h bits.h simulador.h ../comun/enlace_prueba.h \
-              ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h
+ENCABEZADOS = adquisicion.h bits.h control.h diagrama.h exportar.h simulador.h \
+              ../comun/enlace_prueba.h ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h
 
 vpath %.cpp $(IMGUI) $(IMGUI)/backends $(IMPLOT)
 
-visor_enlace: obj/visor_enlace.o obj/adquisicion.o $(OBJ_TERCEROS)
+visor_enlace: obj/visor_enlace.o obj/adquisicion.o obj/diagrama.o $(OBJ_TERCEROS)
 	$(CXX) -o $@ $^ $(FTDI_LIBS) $(GLFW_LIBS) -lpthread
 
 obj/visor_enlace.o: visor_enlace.cpp $(ENCABEZADOS) | obj
@@ -35,6 +36,9 @@ obj/visor_enlace.o: visor_enlace.cpp $(ENCABEZADOS) | obj
 
 obj/adquisicion.o: adquisicion.cpp $(ENCABEZADOS) | obj
 	$(CXX) $(CXXFLAGS) $(FTDI_CFLAGS) -c -o $@ $<
+
+obj/diagrama.o: diagrama.cpp diagrama.h control.h | obj
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
 
 # Código de terceros: sin advertencias adicionales
 obj/%.o: %.cpp | obj
@@ -46,9 +50,13 @@ obj:
 prueba_bits: prueba_bits.cpp bits.h simulador.h ../comun/enlace_prueba.h
 	$(CXX) -std=c++11 -O2 -Wall -Wextra $(FTDI_CFLAGS) -o $@ prueba_bits.cpp $(FTDI_LIBS)
 
+prueba_control: prueba_control.cpp adquisicion.cpp $(ENCABEZADOS)
+	$(CXX) $(CXXFLAGS) $(FTDI_CFLAGS) -o $@ prueba_control.cpp adquisicion.cpp $(FTDI_LIBS) -lpthread
+
 .PHONY: prueba clean
-prueba: prueba_bits
+prueba: prueba_bits prueba_control
 	./prueba_bits
+	./prueba_control
 
 clean:
-	rm -rf obj visor_enlace prueba_bits
+	rm -rf obj visor_enlace prueba_bits prueba_control

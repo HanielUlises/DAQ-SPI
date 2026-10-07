@@ -80,6 +80,7 @@ __pycache__/
 # Binarios del visor y de sus pruebas
 herramientas/visor_enlace/visor_enlace
 herramientas/visor_enlace/prueba_bits
+herramientas/visor_enlace/prueba_control
 herramientas/visor_enlace/obj/
 resultados/**/*.ppm
 

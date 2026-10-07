@@ -187,21 +187,48 @@ omisión).
 
 ### Visor en tiempo real
 
-`herramientas/visor_enlace` corre la misma prueba que `prueba_enlace` con
-una interfaz al estilo del Scope de Simulink: voltaje de salida, posición
-del encoder y duración de cada transferencia con el eje de tiempo ligado,
-contadores `Errores` y `Atrasos`, disparo por error, la tabla de tramas con
-error (con la respuesta esperada y el status de la respuesta siguiente) y el
-mapa de bits erróneos. Incluye un generador de señal para la salida, que
-arranca deshabilitada (0 V). Requiere GLFW y OpenGL (Fedora: `glfw-devel
-mesa-libGL-devel`) además de libftdi1.
+`herramientas/visor_enlace` corre la misma prueba que `prueba_enlace` y, en
+cada paso, un modelo equivalente al de Simulink con `daqPic`, de modo que
+los experimentos con el motor pueden hacerse en Linux sin MATLAB:
+
+- **Lazo abierto:** fuente → saturación → `daqPic`. La fuente es un
+  generador de escalón, rampa, senoidal o cuadrada, en volts.
+- **Lazo cerrado:** referencia → Σ → PID → saturación → `daqPic`, con la
+  posición del encoder como retroalimentación. El PID es el *Discrete PID
+  Controller* de Simulink en forma paralela (integrador de Euler hacia
+  adelante, derivada con filtro N y anti-windup por sujeción). Como en
+  `daqPic`, el paso k usa la posición que llegó en la transferencia k-1.
+
+La ventana tiene una barra de herramientas (Iniciar/Detener con Ctrl+T,
+modelo, periodo de muestreo `Ts`, tiempo final o número de tramas, salida),
+el diagrama de bloques y el Scope. Un clic sobre un bloque muestra sus
+parámetros a la izquierda; las ganancias, la referencia y la saturación se
+cambian con la prueba en curso. La posición es relativa al inicio de la
+prueba y se expresa en cuentas, vueltas, grados o radianes (bloque `daqPic`,
+con las cuentas por vuelta del encoder). El Scope grafica el voltaje `u`, la
+posición `y` con la referencia `r`, el error y la duración de cada
+transferencia con el eje de tiempo ligado, con cursores, disparo por error y
+estadísticas de la ventana; desde el bloque Scope se exportan `t`, `u`, `y`,
+`r`, `e` y `dt` a `.mat` (MAT 4, `load` en MATLAB) o `.csv`, como *To
+Workspace*. Se conservan los contadores `Errores` y `Atrasos`, la tabla de
+tramas con error (con la respuesta esperada y el status de la respuesta
+siguiente) y el mapa de bits erróneos.
+
+La salida arranca deshabilitada (0 V) salvo con `-salida`; al habilitarla,
+el generador y el PID arrancan desde t = 0. Requiere GLFW y OpenGL (Fedora:
+`glfw-devel mesa-libGL-devel`) además de libftdi1.
 
 ```
 make -C herramientas/visor_enlace
 herramientas/visor_enlace/visor_enlace -periodo 1000
 herramientas/visor_enlace/visor_enlace -simulado     # sin hardware
+herramientas/visor_enlace/visor_enlace -periodo 1000 -tf 10 -cerrado -kp 0.003
 make -C herramientas/visor_enlace prueba             # pruebas sin hardware
 ```
+
+Las pruebas sin hardware cubren `bits.h`, el generador, el PID, la
+exportación y el lazo cerrado completo contra el simulador del dsPIC y de un
+motor de primer orden.
 
 ### Batería de pruebas
 

@@ -1,24 +1,34 @@
 /*
- * Visor en tiempo real de la prueba del enlace PC <-> dsPIC, al estilo del
- * Scope de Simulink. Ejecuta el mismo ciclo que prueba_enlace en un hilo
- * aparte (adquisicion.h) y muestra, con el eje de tiempo ligado:
- *   - el voltaje de salida que se envía al DAC,
- *   - la posición del encoder,
- *   - la duración de cada transferencia, con el periodo y las tramas con error.
- * Además lleva los contadores de prueba_enlace, un generador de señal para la
- * salida, disparo por error, el mapa de bits erróneos contra la respuesta
- * esperada (bits.h, misma lógica que herramientas/reporte) y el registro CSV
- * compatible con herramientas/reporte.
+ * Visor en tiempo real del enlace PC <-> dsPIC que hace las veces de un
+ * modelo de Simulink con daqPic, sin MATLAB. Ejecuta el mismo ciclo que
+ * prueba_enlace en un hilo aparte (adquisicion.h) y, en cada paso, el modelo
+ * de control.h:
+ *   - lazo abierto: fuente de señal [V] -> saturación -> daqPic;
+ *   - lazo cerrado: referencia -> PID discreto -> saturación -> daqPic, con
+ *     la posición del encoder como retroalimentación.
+ * La ventana tiene la barra de herramientas (Iniciar/Detener, periodo de
+ * muestreo, tiempo final, salida), el diagrama de bloques (diagrama.h), cuyos
+ * bloques se seleccionan para editar sus parámetros, incluso con la prueba en
+ * curso, y el Scope con voltaje, posición y referencia, error y duración de
+ * cada transferencia con el eje de tiempo ligado. Además lleva los contadores
+ * de prueba_enlace, disparo por error, cursores, el mapa de bits erróneos
+ * contra la respuesta esperada (bits.h, misma lógica que herramientas/reporte),
+ * el registro CSV compatible con herramientas/reporte y la exportación de las
+ * señales a .mat o .csv, como To Workspace (exportar.h).
  *
  * El eje de tiempo es k Ts cuando hay periodo fijo y tiempo de pared cuando
  * las tramas se envían lo más rápido posible.
  *
- * Uso: visor_enlace [-n tramas] [-periodo us] [-reloj Hz] [-lazo | -simulado]
+ * Uso: visor_enlace [-n tramas | -tf s] [-periodo us] [-reloj Hz] [-lazo | -simulado]
+ *                   [-cerrado] [-kp V] [-ki V] [-kd V] [-salida]
  *                   [-registro archivo.csv] [-iniciar] [-salir] [-captura archivo.ppm]
- * -iniciar arranca la prueba al abrir. -salir cierra el visor al terminar la
- * prueba, imprime el resumen y devuelve 0 sin errores, 1 con errores y 2 si no
- * se pudo abrir el dispositivo, como prueba_enlace. -captura guarda la ventana
- * en formato PPM al terminar la prueba (con -salir) o a los 3 s, y sale.
+ * -tf fija el tiempo final en segundos. -cerrado arranca en lazo cerrado con
+ * las ganancias dadas (en V por cuenta). -salida habilita la salida desde la
+ * primera trama. -iniciar arranca la prueba al abrir. -salir cierra el visor
+ * al terminar la prueba, imprime el resumen y devuelve 0 sin errores, 1 con
+ * errores y 2 si no se pudo abrir el dispositivo, como prueba_enlace.
+ * -captura guarda la ventana en formato PPM al terminar la prueba (con -salir)
+ * o a los 3 s, y sale.
  */
 #include <algorithm>
 #include <cmath>
@@ -37,10 +47,13 @@
 
 #include "adquisicion.h"
 #include "bits.h"
+#include "diagrama.h"
+#include "exportar.h"
 
 /* ---- Colores del Scope -------------------------------------------------- */
 
 static const ImVec4 kAmarillo(1.0f, 1.0f, 0.0f, 1.0f);
+static const ImVec4 kAzul(0.07f, 0.62f, 1.0f, 1.0f);
 static const ImVec4 kMagenta(1.0f, 0.0f, 1.0f, 1.0f);
 static const ImVec4 kCian(0.0f, 1.0f, 1.0f, 1.0f);
 static const ImVec4 kRojo(1.0f, 0.25f, 0.25f, 1.0f);
@@ -54,8 +67,9 @@ static const ImVec4 kBlanco(1.0f, 1.0f, 1.0f, 1.0f);
 struct Muestra {
     double t;           /* s */
     float dt;           /* duración de la transferencia, us */
-    float voltaje;      /* V */
-    int32_t posicion;   /* cuentas; se mantiene la última válida */
+    float u;            /* voltaje enviado al DAC, V */
+    float r;            /* referencia, cuentas; NAN si no hay */
+    int32_t y;          /* posición relativa al origen, cuentas */
 };
 
 /* Buffer circular con las últimas muestras, en orden de tiempo */
@@ -118,8 +132,8 @@ static void decimar(const Historial &h, size_t i0, size_t i1, int columnas, F va
         double vmin = valor(h[a]), vmax = vmin;
         for (size_t i = a + 1; i < b; i++) {
             const double v = valor(h[i]);
-            if (v < vmin) { vmin = v; imin = i; }
-            if (v > vmax) { vmax = v; imax = i; }
+            if (v < vmin || std::isnan(vmin)) { vmin = v; imin = i; }
+            if (v > vmax || std::isnan(vmax)) { vmax = v; imax = i; }
         }
         const size_t p = std::min(imin, imax), q = std::max(imin, imax);
         xs.push_back(h[p].t);
@@ -205,11 +219,24 @@ static const int kCubetasFinas = 400;
 
 enum EstadoDisparo { DISPARO_ARMADO, DISPARO_ESPERANDO, DISPARO_DISPARADO };
 
+/* Cómo termina la prueba */
+enum Fin { FIN_TIEMPO, FIN_TRAMAS, FIN_NUNCA, FIN_NUM };
+static const char *const kFines[FIN_NUM] = {"tiempo final [s]", "tramas", "sin límite"};
+
+/* Displays del Scope */
+enum Display { DISP_U, DISP_Y, DISP_E, DISP_DT, DISP_NUM };
+static const char *const kDisplays[DISP_NUM] = {
+    "voltaje u", "posición y (y referencia r)", "error e = r − y", "duración de la transferencia dt",
+};
+
 struct Visor {
     Adquisicion adq;
     Configuracion conf;
-    Generador gen;
-    bool iniciada = false;      /* hubo al menos una prueba desde que se abrió */
+    Modelo modelo;
+    Fin fin = FIN_TIEMPO;
+    double tiempo_final = 10.0;         /* s */
+    unsigned long tramas_fin = 100000;
+    bool iniciada = false;              /* hubo al menos una prueba desde que se abrió */
     std::string mensaje;
 
     /* Datos de la prueba en curso o de la última */
@@ -219,13 +246,15 @@ struct Visor {
     AnalisisBits bits{500};
     Trama ultima;
     bool hay_ultima = false;
-    int32_t ultima_posicion = 0;
     double periodo_us = 0.0;
     bool lazo = false;
+    bool cerrado = false;               /* tipo de lazo de la prueba en curso o de la última */
     Instantanea inst;
-    std::vector<Trama> lote = std::vector<Trama>(1u << 14);
+    std::vector<Paso> lote = std::vector<Paso>(1u << 14);
 
     /* Vista */
+    Bloque seleccion = BLOQUE_FUENTE;
+    bool ver_diagrama = true;
     double lapso = 5.0;
     bool seguir = true;
     double x_min = 0.0, x_max = 5.0;
@@ -239,9 +268,16 @@ struct Visor {
     std::string causa_disparo;
     bool histograma_log = true;
     bool dt_log = false;
-    float fraccion_displays = 0.62f;    /* alto de los displays sobre el panel derecho */
-    float filas_displays[3] = {1.0f, 1.0f, 1.2f};
+    bool mostrar[DISP_NUM] = {true, true, true, true};
+    float filas[DISP_NUM] = {1.0f, 1.2f, 0.8f, 1.0f};
+    float fraccion_displays = 0.74f;    /* alto de los displays sobre el panel derecho */
     bool terminada = false;             /* la prueba terminó y ya se extrajeron todas sus tramas */
+
+    /* Exportación (To Workspace) */
+    std::string ruta_exportar = "senales.mat";
+    bool exportar_ventana = false;
+    std::string mensaje_exportar;
+    bool error_exportar = false;
 
     /* Tiempo de ciclo de la interfaz */
     double t_cuadro = 0.0, cuadro_ms = 0.0, cuadro_max_ms = 0.0, trabajo_ms = 0.0;
@@ -260,18 +296,34 @@ static void limpiar_datos(Visor &v)
     memset(v.fino, 0, sizeof v.fino);
     v.bits.reiniciar(v.lazo);
     v.hay_ultima = false;
-    v.ultima_posicion = 0;
     v.estado_disparo = DISPARO_ARMADO;
     v.terminada = false;
     v.x_min = 0.0;
     v.x_max = v.lapso;
 }
 
+/* Fija tramas y duración de la configuración según el fin elegido */
+static void aplicar_fin(Visor &v)
+{
+    v.conf.tramas = 0;
+    v.conf.duracion_s = 0.0;
+    if (v.fin == FIN_TRAMAS) {
+        v.conf.tramas = v.tramas_fin;
+    } else if (v.fin == FIN_TIEMPO && v.conf.periodo_us > 0.0) {
+        /* k Ts para k = 0..N-1, incluido t = tiempo final como en Simulink */
+        v.conf.tramas = (unsigned long)std::floor(v.tiempo_final / (v.conf.periodo_us * 1e-6) + 1e-9) + 1;
+    } else if (v.fin == FIN_TIEMPO) {
+        v.conf.duracion_s = v.tiempo_final;
+    }
+}
+
 static void iniciar(Visor &v)
 {
+    aplicar_fin(v);
     v.periodo_us = v.conf.periodo_us;
     v.lazo = v.conf.modo == MODO_LAZO;
-    v.adq.generador(v.gen);
+    v.cerrado = v.modelo.cerrado;
+    v.adq.modelo(v.modelo);
     if (v.adq.iniciar(v.conf)) {
         limpiar_datos(v);
         v.iniciada = true;
@@ -279,6 +331,15 @@ static void iniciar(Visor &v)
         v.mensaje.clear();
     } else {
         v.mensaje = v.adq.error();
+    }
+}
+
+static void alternar(Visor &v)
+{
+    if (v.adq.activa()) {
+        v.adq.detener();
+    } else {
+        iniciar(v);
     }
 }
 
@@ -297,15 +358,16 @@ static void disparar_si_corresponde(Visor &v, const Trama &t, double ts, unsigne
     }
 }
 
-static void procesar(Visor &v, const Trama &t)
+static void procesar(Visor &v, const Paso &p)
 {
+    const Trama &t = p.t;
     const double ts = v.periodo_us > 0.0 ? t.k * v.periodo_us * 1e-6 : t.t_us * 1e-6;
-    if (t.status >= 0) v.ultima_posicion = t.posicion;
     Muestra m;
     m.t = ts;
     m.dt = (float)t.dt_us;
-    m.voltaje = (float)voltaje_trama(t.tx);
-    m.posicion = v.ultima_posicion;
+    m.u = (float)voltaje_trama(t.tx);
+    m.r = p.r;
+    m.y = p.y;
     v.hist.agregar(m);
 
     int cubeta = (int)(t.dt_us / kAnchoFino);
@@ -350,7 +412,54 @@ static void actualizar(Visor &v)
     }
 }
 
-/* ---- Paneles ------------------------------------------------------------ */
+/* Unidad de posición con la que se muestran y y r */
+static const char *unidad(const Visor &v) { return kUnidades[v.modelo.unidad]; }
+
+/* ---- Exportación -------------------------------------------------------- */
+
+static void exportar(Visor &v)
+{
+    size_t i0 = 0, i1 = v.hist.size();
+    if (v.exportar_ventana) {
+        i0 = v.hist.buscar(v.x_min);
+        i1 = v.hist.buscar(v.x_max);
+    }
+    const double escala = v.modelo.escala();
+    std::vector<Columna> c(6);
+    c[0].nombre = "t";
+    c[1].nombre = "u";
+    c[2].nombre = "y";
+    c[3].nombre = "r";
+    c[4].nombre = "e";
+    c[5].nombre = "dt";
+    for (size_t i = i0; i < i1; i++) {
+        const Muestra &m = v.hist[i];
+        const double y = m.y / escala, r = m.r / escala;
+        c[0].datos.push_back(m.t);
+        c[1].datos.push_back(m.u);
+        c[2].datos.push_back(y);
+        c[3].datos.push_back(r);
+        c[4].datos.push_back(r - y);
+        c[5].datos.push_back(m.dt * 1e-6);
+    }
+    char buf[200];
+    snprintf(buf, sizeof buf,
+             "visor_enlace: t [s], u [V], y y r [%s], e = r - y, dt [s] (duración de la transferencia)\n"
+             "r y e valen NaN sin lazo cerrado con la salida habilitada",
+             unidad(v));
+    const std::string comentario = buf + std::string("\n") + descripcion_modelo(v.modelo);
+    std::string error;
+    if (exportar_senales(v.ruta_exportar, c, comentario, error)) {
+        snprintf(buf, sizeof buf, "%zu muestras en %s", i1 - i0, v.ruta_exportar.c_str());
+        v.mensaje_exportar = buf;
+        v.error_exportar = false;
+    } else {
+        v.mensaje_exportar = error;
+        v.error_exportar = true;
+    }
+}
+
+/* ---- Utilidades de la interfaz ------------------------------------------ */
 
 static void ayuda(const char *texto)
 {
@@ -377,10 +486,259 @@ static void fila_contador(const char *nombre, unsigned long valor, bool es_error
     }
 }
 
-static void panel_prueba(Visor &v)
+static bool entrada(const char *etiqueta, double *valor, const char *formato = "%.6g")
+{
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+    return ImGui::InputDouble(etiqueta, valor, 0.0, 0.0, formato);
+}
+
+/* Botón con color propio */
+static bool boton_color(const char *texto, ImVec4 color, ImVec2 tam = ImVec2(0, 0))
+{
+    ImGui::PushStyleColor(ImGuiCol_Button, color);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          ImVec4(std::min(1.0f, color.x * 1.2f + 0.05f), std::min(1.0f, color.y * 1.2f + 0.05f),
+                                 std::min(1.0f, color.z * 1.2f + 0.05f), 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, color);
+    const bool r = ImGui::Button(texto, tam);
+    ImGui::PopStyleColor(3);
+    return r;
+}
+
+/* ---- Barra de herramientas ---------------------------------------------- */
+
+static void barra(Visor &v)
 {
     const bool activa = v.adq.activa();
-    ImGui::SeparatorText("Prueba");
+    const float f = ImGui::GetFontSize();
+    const ImVec2 alto(0, ImGui::GetFrameHeight() * 1.25f);
+
+    if (!activa) {
+        if (boton_color("▶  Iniciar", ImVec4(0.12f, 0.45f, 0.18f, 1.0f), ImVec2(f * 7, alto.y))) iniciar(v);
+    } else {
+        if (boton_color("■  Detener", ImVec4(0.55f, 0.12f, 0.12f, 1.0f), ImVec2(f * 7, alto.y))) v.adq.detener();
+    }
+    ImGui::SetItemTooltip("Ctrl+T");
+
+    ImGui::SameLine(0.0f, f * 1.2f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::BeginDisabled(activa);
+    ImGui::TextUnformatted("Modelo");
+    ImGui::SameLine();
+    int cerrado = v.modelo.cerrado ? 1 : 0;
+    ImGui::SetNextItemWidth(f * 11);
+    static const char *const kLazos[2] = {"lazo abierto", "lazo cerrado (PID)"};
+    if (ImGui::Combo("##lazo", &cerrado, kLazos, 2)) {
+        v.modelo.cerrado = cerrado != 0;
+        if (v.seleccion == BLOQUE_SUMA || v.seleccion == BLOQUE_PID) v.seleccion = BLOQUE_FUENTE;
+        v.adq.modelo(v.modelo);
+    }
+
+    ImGui::SameLine(0.0f, f * 1.2f);
+    ImGui::TextUnformatted("Ts [ms]");
+    ImGui::SameLine();
+    double ts_ms = v.conf.periodo_us * 1e-3;
+    ImGui::SetNextItemWidth(f * 5);
+    if (ImGui::InputDouble("##ts", &ts_ms, 0.0, 0.0, "%.3g")) v.conf.periodo_us = std::max(0.0, ts_ms * 1e3);
+    ImGui::SetItemTooltip("Periodo de muestreo (paso fijo). 0: lo más rápido posible, con el tiempo de pared.");
+
+    ImGui::SameLine(0.0f, f * 1.2f);
+    int fin = (int)v.fin;
+    ImGui::SetNextItemWidth(f * 10.0f);
+    if (ImGui::Combo("##fin", &fin, kFines, FIN_NUM)) v.fin = (Fin)fin;
+    if (v.fin != FIN_NUNCA) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(f * 6);
+        if (v.fin == FIN_TIEMPO) {
+            if (ImGui::InputDouble("##tf", &v.tiempo_final, 0.0, 0.0, "%.4g")) {
+                v.tiempo_final = std::max(0.001, v.tiempo_final);
+            }
+        } else {
+            int n = (int)std::min<unsigned long>(v.tramas_fin, 2000000000ul);
+            if (ImGui::InputInt("##tramas", &n, 0, 0)) v.tramas_fin = (unsigned long)std::max(1, n);
+        }
+    }
+    ImGui::EndDisabled();
+
+    /* Salida analógica */
+    ImGui::SameLine(0.0f, f * 1.2f);
+    const bool sal = v.adq.salida;
+    if (activa) {
+        if (sal) {
+            if (boton_color("SALIDA HABILITADA", ImVec4(0.75f, 0.1f, 0.1f, 1.0f), ImVec2(f * 11, alto.y))) {
+                v.adq.salida = false;
+            }
+            ImGui::SetItemTooltip("Clic: deshabilitar (el DAC va a 0 V)");
+        } else {
+            if (ImGui::Button("Habilitar salida", ImVec2(f * 11, alto.y))) v.adq.salida = true;
+            ImGui::SetItemTooltip("El motor se mueve. El generador y el PID arrancan desde t = 0.");
+        }
+    } else {
+        ImGui::Checkbox("salida al iniciar", &v.conf.salida);
+        ImGui::SetItemTooltip("Si no, la salida arranca en 0 V y se habilita durante la prueba.");
+    }
+
+    ImGui::SameLine(0.0f, f * 1.2f);
+    ImGui::Checkbox("diagrama", &v.ver_diagrama);
+}
+
+/* Barra de estado al pie, como la de Simulink */
+static void barra_estado(Visor &v)
+{
+    const bool activa = v.adq.activa();
+    const Contadores &c = v.inst.e.c;
+    const unsigned long errores = prueba_errores(&c);
+    const float f = ImGui::GetFontSize();
+    ImGui::Separator();
+    ImGui::AlignTextToFramePadding();
+    if (!v.mensaje.empty()) {
+        ImGui::TextColored(kRojo, "%s", v.mensaje.c_str());
+    } else if (activa) {
+        ImGui::TextColored(kVerde, v.adq.salida ? "En ejecución, salida habilitada" : "En ejecución");
+    } else {
+        ImGui::TextUnformatted(v.iniciada ? "Terminada" : "Listo");
+    }
+    const double t_sim = v.hist.size() > 0 ? v.hist[v.hist.size() - 1].t : 0.0;
+    ImGui::SameLine(f * 18);
+    ImGui::Text("T = %.3f s", t_sim);
+    ImGui::SameLine(f * 26);
+    float progreso = -1.0f;
+    const Configuracion &conf = v.adq.configuracion();
+    if (v.iniciada && conf.tramas > 0) {
+        progreso = (float)c.tramas / (float)conf.tramas;
+    } else if (v.iniciada && conf.duracion_s > 0.0) {
+        progreso = (float)std::min(1.0, v.inst.transcurrido_us * 1e-6 / conf.duracion_s);
+    }
+    if (progreso >= 0.0f) {
+        ImGui::ProgressBar(progreso, ImVec2(f * 10, ImGui::GetTextLineHeight()));
+    } else {
+        ImGui::TextDisabled("sin límite");
+    }
+    ImGui::SameLine(f * 38);
+    if (v.iniciada) {
+        if (errores == 0) {
+            ImGui::TextColored(kVerde, "SIN ERRORES");
+        } else {
+            ImGui::TextColored(kRojo, "%lu ERRORES", errores);
+        }
+    }
+    ImGui::SameLine(f * 47);
+    const double t = v.inst.transcurrido_us * 1e-6;
+    ImGui::TextDisabled("%lu tramas, %.0f tramas/s", c.tramas, t > 0.0 ? c.tramas / t : 0.0);
+    ImGui::SameLine(f * 62);
+    if (v.conf.periodo_us > 0.0) {
+        ImGui::TextDisabled("FixedStepDiscrete, Ts = %g ms", v.conf.periodo_us * 1e-3);
+    } else {
+        ImGui::TextDisabled("lo más rápido posible");
+    }
+}
+
+/* ---- Inspector de parámetros -------------------------------------------- */
+
+/* Editor de una fuente de señal; voltaje limita los valores a ±DAQ_V_MAX */
+static bool editar_generador(Generador &g, const char *u, bool voltaje)
+{
+    bool cambio = false;
+    char etiqueta[64];
+    int forma = (int)g.forma;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+    if (ImGui::Combo("señal", &forma, kFormas, FORMA_NUM)) {
+        g.forma = (Forma)forma;
+        cambio = true;
+    }
+    ImGui::BeginDisabled(g.forma == FORMA_NADA);
+    static const double a_max = DAQ_V_MAX, cero = 0.0, d_min = -DAQ_V_MAX, d_max = DAQ_V_MAX;
+    snprintf(etiqueta, sizeof etiqueta, g.forma == FORMA_ESCALON ? "altura [%s]" : "amplitud [%s]", u);
+    if (voltaje) {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+        cambio |= ImGui::SliderScalar(etiqueta, ImGuiDataType_Double, &g.amplitud, &cero, &a_max, "%.3f");
+    } else {
+        cambio |= entrada(etiqueta, &g.amplitud);
+    }
+    ImGui::BeginDisabled(g.forma == FORMA_ESCALON);
+    static const double f_min = 0.01, f_max = 100.0;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+    cambio |= ImGui::SliderScalar("frecuencia [Hz]", ImGuiDataType_Double, &g.frecuencia, &f_min, &f_max,
+                                  "%.3g", ImGuiSliderFlags_Logarithmic);
+    ImGui::EndDisabled();
+    snprintf(etiqueta, sizeof etiqueta, g.forma == FORMA_ESCALON ? "valor inicial [%s]" : "desplazamiento [%s]", u);
+    if (voltaje) {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+        cambio |= ImGui::SliderScalar(etiqueta, ImGuiDataType_Double, &g.desplazamiento, &d_min, &d_max, "%.3f");
+    } else {
+        cambio |= entrada(etiqueta, &g.desplazamiento);
+    }
+    if (entrada(g.forma == FORMA_ESCALON ? "tiempo del escalón [s]" : "inicio [s]", &g.retardo, "%.4g")) {
+        g.retardo = std::max(0.0, g.retardo);
+        cambio = true;
+    }
+    ayuda("Tiempo desde que se habilita la salida. Antes vale el desplazamiento (o el valor inicial).");
+    ImGui::EndDisabled();
+    return cambio;
+}
+
+static void inspector_fuente(Visor &v)
+{
+    Modelo &m = v.modelo;
+    bool cambio;
+    if (!m.cerrado) {
+        cambio = editar_generador(m.fuente, "V", true);
+        const Generador &g = m.fuente;
+        const double alto = g.forma == FORMA_NADA ? 0.0 : g.desplazamiento + g.amplitud;
+        const double bajo = g.forma == FORMA_NADA ? 0.0
+                            : g.forma == FORMA_ESCALON ? std::min(g.desplazamiento, alto)
+                            : g.desplazamiento - g.amplitud;
+        if (alto > m.u_max || bajo < m.u_min) {
+            ImGui::TextColored(kNaranja, "Se satura a [%.2f, %.2f] V", m.u_min, m.u_max);
+        }
+    } else {
+        cambio = editar_generador(m.referencia, unidad(v), false);
+    }
+    ImGui::TextDisabled("Cambiar la señal reinicia su tiempo.");
+    if (cambio) v.adq.modelo(m);
+}
+
+static void inspector_pid(Visor &v)
+{
+    Pid &p = v.modelo.pid;
+    char etiqueta[64];
+    bool cambio = false;
+    snprintf(etiqueta, sizeof etiqueta, "P  [V/%s]", unidad(v));
+    cambio |= entrada(etiqueta, &p.kp);
+    snprintf(etiqueta, sizeof etiqueta, "I  [V/(%s·s)]", unidad(v));
+    cambio |= entrada(etiqueta, &p.ki);
+    snprintf(etiqueta, sizeof etiqueta, "D  [V·s/%s]", unidad(v));
+    cambio |= entrada(etiqueta, &p.kd);
+    if (entrada("N  [1/s]", &p.n)) {
+        p.n = std::max(0.0, p.n);
+        cambio = true;
+    }
+    ayuda("Coeficiente del filtro de la derivada.");
+    cambio |= ImGui::Checkbox("derivada sobre la medición", &p.d_medicion);
+    ayuda("Deriva -y en lugar de e: sin patada derivativa en los cambios de la referencia.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("C(z) = P + I·Ts/(z − 1) + D·N / (1 + N·Ts·z/(z − 1))");
+    ImGui::TextDisabled("Anti-windup por sujeción con los límites de la saturación.");
+    ImGui::TextDisabled("Las ganancias cambian sin reiniciar el integrador.");
+    if (cambio) v.adq.modelo(v.modelo);
+}
+
+static void inspector_saturacion(Visor &v)
+{
+    Modelo &m = v.modelo;
+    bool cambio = entrada("límite superior [V]", &m.u_max, "%.3f");
+    cambio |= entrada("límite inferior [V]", &m.u_min, "%.3f");
+    if (cambio) {
+        m.u_max = std::max(-DAQ_V_MAX, std::min(DAQ_V_MAX, m.u_max));
+        m.u_min = std::max(-DAQ_V_MAX, std::min(m.u_max, m.u_min));
+        v.adq.modelo(m);
+    }
+    ImGui::TextDisabled("El DAC admite de %.1f a %.1f V.", -DAQ_V_MAX, DAQ_V_MAX);
+}
+
+static void inspector_daq(Visor &v)
+{
+    const bool activa = v.adq.activa();
     ImGui::BeginDisabled(activa);
     int modo = (int)v.conf.modo;
     ImGui::RadioButton("dsPIC", &modo, MODO_DSPIC);
@@ -391,24 +749,10 @@ static void panel_prueba(Visor &v)
 #endif
     ImGui::RadioButton("simulado", &modo, MODO_SIMULADO);
     ayuda("dsPIC: tarjeta completa. Lazo: MOSI unido a MISO dentro del FT2232H, sin dsPIC. "
-          "Simulado: modelo del dsPIC y del motor, sin hardware.");
+          "Simulado: modelo del dsPIC y de un motor de primer orden, sin hardware.");
     v.conf.modo = (Modo)modo;
-
-    bool sin_limite = v.conf.tramas == 0;
-    int tramas = (int)(sin_limite ? 100000 : v.conf.tramas);
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    ImGui::BeginDisabled(sin_limite);
-    if (ImGui::InputInt("tramas", &tramas, 10000, 100000)) v.conf.tramas = (unsigned long)std::max(1, tramas);
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Checkbox("sin límite", &sin_limite)) v.conf.tramas = sin_limite ? 0 : 100000;
-
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    ImGui::InputDouble("periodo [us]", &v.conf.periodo_us, 100.0, 1000.0, "%.0f");
-    if (v.conf.periodo_us < 0.0) v.conf.periodo_us = 0.0;
-    ayuda("0: lo más rápido posible. Con periodo fijo el eje de tiempo es k Ts.");
     int reloj = (int)v.conf.reloj;
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
     if (ImGui::InputInt("SCK [Hz]", &reloj, 100000, 1000000)) {
         v.conf.reloj = (unsigned long)std::max(100000, std::min(30000000, reloj));
     }
@@ -422,116 +766,34 @@ static void panel_prueba(Visor &v)
     ImGui::EndDisabled();
     ImGui::EndDisabled();
 
-    const ImVec2 boton(-1, ImGui::GetFrameHeight() * 1.4f);
-    if (!activa) {
-        if (ImGui::Button("Iniciar", boton)) iniciar(v);
-    } else {
-        if (ImGui::Button("Detener", boton)) v.adq.detener();
-    }
-    if (!v.mensaje.empty()) ImGui::TextColored(kRojo, "%s", v.mensaje.c_str());
-}
-
-static void panel_estado(Visor &v)
-{
-    const Contadores &c = v.inst.e.c;
-    const unsigned long errores = prueba_errores(&c);
-    ImGui::SeparatorText("Estado");
-    if (!v.iniciada) {
-        ImGui::TextDisabled("Sin prueba.");
-    } else if (errores == 0) {
-        ImGui::TextColored(kVerde, "SIN ERRORES");
-    } else {
-        ImGui::TextColored(kRojo, "CON ERRORES");
-    }
-    if (v.iniciada) {
-        ImGui::SameLine();
-        ImGui::TextDisabled(v.adq.activa() ? "(en curso)" : "(terminada)");
-    }
-    const double t = v.inst.transcurrido_us * 1e-6;
-    ImGui::Text("%lu tramas en %.1f s (%.0f tramas/s)", c.tramas, t, t > 0.0 ? c.tramas / t : 0.0);
-    if (v.iniciada && v.adq.configuracion().tramas > 0) {
-        ImGui::ProgressBar((float)c.tramas / (float)v.adq.configuracion().tramas, ImVec2(-1, 0));
-    }
-    if (ImGui::BeginTable("totales", 2, ImGuiTableFlags_SizingStretchProp)) {
-        fila_contador("Errores", errores);
-        fila_contador("Atrasos (dt > periodo)", v.inst.atrasos);
-        ImGui::EndTable();
-    }
-    if (v.adq.descartadas() > 0) {
-        ImGui::TextColored(kNaranja, "%lu tramas sin graficar (la interfaz se atrasó)",
-                           v.adq.descartadas());
-    }
-    const std::string aviso = v.adq.aviso_tiempo_real();
-    if (!aviso.empty()) {
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("Adquisición: %s", aviso.c_str());
-        ImGui::PopTextWrapPos();
-    }
-    ImGui::TextColored(v.cuadro_max_ms > 50.0 ? kNaranja : kGris,
-                       "Ciclo GUI: %.1f ms (máx %.0f ms, trabajo %.1f ms)",
-                       v.cuadro_ms, v.cuadro_max_ms, v.trabajo_ms);
-    ayuda("Duración de cada cuadro de la interfaz. La interfaz corre en otro hilo, pero la carga "
-          "de la PC ensucia la cola de dt: para pruebas de aceptación conviene prueba_enlace.");
-}
-
-static void panel_salida(Visor &v)
-{
-    const bool activa = v.adq.activa();
-    ImGui::SeparatorText("Salida analógica");
-    const bool sal = v.adq.salida;
-    const ImVec2 boton(-1, ImGui::GetFrameHeight() * 1.4f);
-    ImGui::BeginDisabled(!activa);
-    if (sal) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.1f, 0.1f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-        if (ImGui::Button("SALIDA HABILITADA (clic para 0 V)", boton)) v.adq.salida = false;
-        ImGui::PopStyleColor(2);
-    } else {
-        if (ImGui::Button("Habilitar salida (el motor se mueve)", boton)) v.adq.salida = true;
-    }
-    ImGui::EndDisabled();
-    if (!activa) ImGui::TextDisabled("La salida se habilita durante la prueba y arranca en 0 V.");
-
-    bool cambio = false;
-    int forma = (int)v.gen.forma;
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
-    if (ImGui::Combo("señal", &forma, kFormas, FORMA_NUM)) {
-        v.gen.forma = (Forma)forma;
+    ImGui::SeparatorText("Encoder");
+    int u = (int)v.modelo.unidad;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+    bool cambio = ImGui::Combo("unidad", &u, kUnidades, UNIDAD_NUM);
+    v.modelo.unidad = (Unidad)u;
+    ImGui::BeginDisabled(v.modelo.unidad == UNIDAD_CUENTAS);
+    if (entrada("cuentas por vuelta", &v.modelo.cuentas_por_vuelta, "%.0f")) {
+        v.modelo.cuentas_por_vuelta = std::max(1.0, v.modelo.cuentas_por_vuelta);
         cambio = true;
     }
-    ImGui::BeginDisabled(v.gen.forma == FORMA_NADA);
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    cambio |= ImGui::SliderScalar("amplitud [V]", ImGuiDataType_Double, &v.gen.amplitud,
-                                  &(const double &)0.0, &(const double &)DAQ_V_MAX, "%.2f");
-    ImGui::BeginDisabled(v.gen.forma == FORMA_ESCALON);
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    static const double f_min = 0.01, f_max = 100.0, d_min = -DAQ_V_MAX, d_max = DAQ_V_MAX;
-    cambio |= ImGui::SliderScalar("frecuencia [Hz]", ImGuiDataType_Double, &v.gen.frecuencia,
-                                  &f_min, &f_max, "%.2f", ImGuiSliderFlags_Logarithmic);
     ImGui::EndDisabled();
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    cambio |= ImGui::SliderScalar("desplazamiento [V]", ImGuiDataType_Double,
-                                  &v.gen.desplazamiento, &d_min, &d_max, "%.2f");
-    ImGui::EndDisabled();
-    if (cambio) v.adq.generador(v.gen);
-    const double alto = v.gen.forma == FORMA_NADA ? 0.0 : v.gen.desplazamiento + v.gen.amplitud;
-    const double bajo = v.gen.forma == FORMA_NADA ? 0.0
-                        : v.gen.forma == FORMA_ESCALON ? alto
-                        : v.gen.desplazamiento - v.gen.amplitud;
-    if (alto > DAQ_V_MAX || bajo < -DAQ_V_MAX) {
-        ImGui::TextColored(kNaranja, "Se satura a ±%.1f V", DAQ_V_MAX);
-    }
+    ayuda("Cuentas del QEI (en cuadratura, 4 por línea) en una vuelta del eje.");
+    if (cambio) v.adq.modelo(v.modelo);
+    ImGui::TextDisabled("La referencia y las ganancias del PID usan esta unidad.");
 
     ImGui::BeginDisabled(!activa);
-    if (ImGui::Button("Reset del encoder")) v.adq.reset_encoder = true;
+    if (ImGui::Button("Poner en cero")) v.adq.cero = true;
+    ayuda("Toma la posición actual como origen, sin tocar el dsPIC.");
+    ImGui::SameLine();
+    if (ImGui::Button("Reset del QEI")) v.adq.reset_encoder = true;
+    ayuda("Envía la bandera de reset del encoder: el dsPIC pone en cero el contador del QEI.");
     ImGui::EndDisabled();
 
     if (v.conf.modo == MODO_SIMULADO) {
         ImGui::SeparatorText("Simulador");
         float ber = (float)v.adq.sim_ber.load();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-        if (ImGui::SliderFloat("errores por bit", &ber, 0.0f, 0.01f, "%.1e",
-                               ImGuiSliderFlags_Logarithmic)) {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+        if (ImGui::SliderFloat("errores por bit", &ber, 0.0f, 0.01f, "%.1e", ImGuiSliderFlags_Logarithmic)) {
             v.adq.sim_ber = ber;
         }
         ImGui::BeginDisabled(!activa);
@@ -540,11 +802,81 @@ static void panel_salida(Visor &v)
     }
 }
 
+static void inspector_scope(Visor &v)
+{
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+    if (ImGui::InputDouble("lapso [s]", &v.lapso, 1.0, 5.0, "%.3g")) v.lapso = std::max(0.01, v.lapso);
+    ayuda("Time span: ancho de la ventana de tiempo.");
+    const bool congelada = v.disparo && v.estado_disparo == DISPARO_DISPARADO;
+    if (ImGui::Button(v.seguir && !congelada ? "Pausa" : "Seguir")) {
+        if (congelada) {
+            v.estado_disparo = DISPARO_ARMADO;
+            v.seguir = true;
+        } else {
+            v.seguir = !v.seguir;
+        }
+    }
+    ayuda("Pausa congela la vista sin detener la prueba; en pausa se puede desplazar y "
+          "acercar con el ratón (doble clic: ajustar).");
+    ImGui::SameLine();
+    if (ImGui::Button("Escalar Y")) v.escalar_y = true;
+    ImGui::SameLine();
+    ImGui::Checkbox("autoescala", &v.autoescala);
+    ImGui::Checkbox("cursores", &v.cursores);
+    if (ImGui::IsItemEdited() && v.cursores) {
+        v.cursor[0] = v.x_min + 0.33 * (v.x_max - v.x_min);
+        v.cursor[1] = v.x_min + 0.66 * (v.x_max - v.x_min);
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("dt en escala log", &v.dt_log);
+
+    ImGui::Checkbox("disparo por error", &v.disparo);
+    ayuda("Congela la ventana en la primera trama con error (CRC, encabezado, secuencia, USB, "
+          "banderas del dsPIC o reinicio), con 20 % de pre-disparo.");
+    if (v.disparo) {
+        ImGui::SameLine();
+        if (v.estado_disparo == DISPARO_ARMADO) {
+            ImGui::TextColored(kVerde, "armado");
+        } else {
+            ImGui::TextColored(kNaranja, v.estado_disparo == DISPARO_ESPERANDO ? "disparando" : "disparado");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Rearmar")) {
+                v.estado_disparo = DISPARO_ARMADO;
+                v.seguir = true;
+            }
+            ImGui::TextWrapped("%s", v.causa_disparo.c_str());
+        }
+    }
+
+    ImGui::SeparatorText("Displays");
+    for (int d = 0; d < DISP_NUM; d++) ImGui::Checkbox(kDisplays[d], &v.mostrar[d]);
+    if (!v.cerrado) ImGui::TextDisabled("r y e sólo existen en lazo cerrado.");
+
+    ImGui::SeparatorText("To Workspace");
+    char ruta[256];
+    snprintf(ruta, sizeof ruta, "%s", v.ruta_exportar.c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##exportar", ruta, sizeof ruta)) v.ruta_exportar = ruta;
+    ImGui::Checkbox("sólo la ventana visible", &v.exportar_ventana);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(v.hist.size() == 0);
+    if (ImGui::Button("Exportar")) exportar(v);
+    ImGui::EndDisabled();
+    ayuda(".mat (MAT 4: load en MATLAB, scipy.io.loadmat) o .csv. Variables t, u, y, r, e y dt, "
+          "en segundos, volts y la unidad de posición.");
+    if (!v.mensaje_exportar.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(v.error_exportar ? kRojo : kGris, "%s", v.mensaje_exportar.c_str());
+        ImGui::PopTextWrapPos();
+    }
+}
+
 static void panel_contadores(Visor &v)
 {
     const Contadores &c = v.inst.e.c;
-    ImGui::SeparatorText("Contadores");
     if (!ImGui::BeginTable("contadores", 2, ImGuiTableFlags_SizingStretchProp)) return;
+    fila_contador("Errores", prueba_errores(&c));
+    fila_contador("Atrasos (dt > periodo)", v.inst.atrasos);
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::TextDisabled("Errores en la PC");
@@ -575,53 +907,81 @@ static void panel_contadores(Visor &v)
     }
 }
 
-static void panel_vista(Visor &v)
+static void panel_estado(Visor &v)
 {
-    ImGui::SeparatorText("Vista");
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    if (ImGui::InputDouble("lapso [s]", &v.lapso, 1.0, 5.0, "%.2f")) {
-        v.lapso = std::max(0.01, v.lapso);
+    if (v.adq.descartadas() > 0) {
+        ImGui::TextColored(kNaranja, "%lu tramas sin graficar (la interfaz se atrasó)",
+                           v.adq.descartadas());
     }
-    ayuda("Time span: ancho de la ventana de tiempo.");
-    const bool congelada = v.disparo && v.estado_disparo == DISPARO_DISPARADO;
-    if (ImGui::Button(v.seguir && !congelada ? "Pausa" : "Seguir")) {
-        if (congelada) {
-            v.estado_disparo = DISPARO_ARMADO;
-            v.seguir = true;
+    const std::string aviso = v.adq.aviso_tiempo_real();
+    if (!aviso.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Adquisición: %s", aviso.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::TextColored(v.cuadro_max_ms > 50.0 ? kNaranja : kGris,
+                       "Ciclo GUI: %.1f ms (máx %.0f ms, trabajo %.1f ms)",
+                       v.cuadro_ms, v.cuadro_max_ms, v.trabajo_ms);
+    ayuda("Duración de cada cuadro de la interfaz. La interfaz corre en otro hilo, pero la carga "
+          "de la PC ensucia la cola de dt: para pruebas de aceptación conviene prueba_enlace.");
+}
+
+static void ultima_trama(Visor &v);
+
+/* Parámetros del bloque seleccionado, como el Property Inspector */
+static void inspector(Visor &v)
+{
+    static const char *const kDescripciones[BLOQUE_NUM] = {
+        NULL,
+        "Sum: error e = r − y.",
+        "Discrete PID Controller en forma paralela.",
+        "Saturation: limita el voltaje que se envía al DAC.",
+        "S-Function: una transferencia SPI por paso; entrega la posición recibida en el paso "
+        "anterior, como el bloque de Simulink.",
+        "Scope: señales del modelo con el eje de tiempo ligado.",
+        "Display: errores de comunicación acumulados.",
+        "Display: pasos en que la transferencia duró más que el periodo.",
+    };
+    const Bloque b = v.seleccion;
+    ImGui::PushStyleColor(ImGuiCol_Text, kAzul);
+    ImGui::Text("Parámetros: %s", nombre_bloque(b, v.modelo.cerrado));
+    ImGui::PopStyleColor();
+    ImGui::PushTextWrapPos(0.0f);
+    if (b == BLOQUE_FUENTE) {
+        if (v.modelo.cerrado) {
+            ImGui::TextDisabled("Signal Generator: posición deseada r, en %s.", unidad(v));
         } else {
-            v.seguir = !v.seguir;
+            ImGui::TextDisabled("Signal Generator: voltaje que se aplica al motor.");
         }
+    } else {
+        ImGui::TextDisabled("%s", kDescripciones[b]);
     }
-    ayuda("Pausa congela la vista sin detener la prueba; en pausa se puede desplazar y "
-          "acercar con el ratón (doble clic: ajustar).");
-    ImGui::SameLine();
-    if (ImGui::Button("Escalar Y")) v.escalar_y = true;
-    ImGui::SameLine();
-    ImGui::Checkbox("autoescala", &v.autoescala);
-    ImGui::Checkbox("dt en escala log", &v.dt_log);
-    ImGui::SameLine();
-    if (ImGui::Checkbox("cursores", &v.cursores) && v.cursores) {
-        v.cursor[0] = v.x_min + 0.33 * (v.x_max - v.x_min);
-        v.cursor[1] = v.x_min + 0.66 * (v.x_max - v.x_min);
+    ImGui::PopTextWrapPos();
+    ImGui::Separator();
+    switch (b) {
+    case BLOQUE_FUENTE:     inspector_fuente(v); break;
+    case BLOQUE_PID:        inspector_pid(v); break;
+    case BLOQUE_SATURACION: inspector_saturacion(v); break;
+    case BLOQUE_DAQ:        inspector_daq(v); break;
+    case BLOQUE_SCOPE:      inspector_scope(v); break;
+    case BLOQUE_SUMA:
+        ImGui::TextDisabled("Sin parámetros.");
+        break;
+    case BLOQUE_ERRORES:
+    case BLOQUE_ATRASOS:
+        panel_contadores(v);
+        break;
+    default:
+        break;
     }
 
-    ImGui::Checkbox("disparo por error", &v.disparo);
-    ayuda("Congela la ventana en la primera trama con error (CRC, encabezado, secuencia, USB, "
-          "banderas del dsPIC o reinicio), con 20 % de pre-disparo.");
-    if (v.disparo) {
-        ImGui::SameLine();
-        if (v.estado_disparo == DISPARO_ARMADO) {
-            ImGui::TextColored(kVerde, "armado");
-        } else {
-            ImGui::TextColored(kNaranja, v.estado_disparo == DISPARO_ESPERANDO ? "disparando" : "disparado");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Rearmar")) {
-                v.estado_disparo = DISPARO_ARMADO;
-                v.seguir = true;
-            }
-            ImGui::TextWrapped("%s", v.causa_disparo.c_str());
-        }
+    ImGui::Spacing();
+    if (b != BLOQUE_ERRORES && b != BLOQUE_ATRASOS &&
+        ImGui::CollapsingHeader("Contadores", ImGuiTreeNodeFlags_DefaultOpen)) {
+        panel_contadores(v);
     }
+    if (ImGui::CollapsingHeader("Última trama")) ultima_trama(v);
+    if (ImGui::CollapsingHeader("Rendimiento")) panel_estado(v);
 }
 
 /* ---- Displays ----------------------------------------------------------- */
@@ -650,59 +1010,107 @@ static void displays(Visor &v, float alto)
     const int columnas = (int)ImGui::GetContentRegionAvail().x;
     static std::vector<double> xs, ys;
     const ImPlotSpec traza(ImPlotProp_LineColor, kAmarillo, ImPlotProp_LineWeight, 1.5f);
+    const ImPlotSpec traza_r(ImPlotProp_LineColor, kAzul, ImPlotProp_LineWeight, 1.5f);
+    const double escala = v.modelo.escala();
+    const char *u = unidad(v);
+    char titulo[96];
 
-    if (!ImPlot::BeginSubplots("##displays", 3, 1, ImVec2(-1, alto), ImPlotSubplotFlags_NoTitle,
-                               v.filas_displays)) {
+    /* Displays visibles y sus proporciones */
+    int vis[DISP_NUM];
+    float filas[DISP_NUM];
+    int n = 0;
+    for (int d = 0; d < DISP_NUM; d++) {
+        if (!v.mostrar[d] || (d == DISP_E && !v.cerrado)) continue;
+        vis[n] = d;
+        filas[n++] = v.filas[d];
+    }
+    if (n == 0) {
+        ImGui::Dummy(ImVec2(-1, alto));
         return;
     }
-    if (ImPlot::BeginPlot("Voltaje de salida [V]", ImVec2(-1, 0), ImPlotFlags_NoLegend)) {
-        ejes(v, "V", -2.75, 2.75);
-        decimar(v.hist, j0, i1, columnas, [](const Muestra &m) { return (double)m.voltaje; }, xs, ys);
-        ImPlot::PlotLine("voltaje", xs.data(), ys.data(), (int)xs.size(), traza);
-        dibujar_cursores(v);
-        ImPlot::EndPlot();
+
+    if (!ImPlot::BeginSubplots("##displays", n, 1, ImVec2(-1, alto), ImPlotSubplotFlags_NoTitle, filas)) {
+        return;
     }
-    if (ImPlot::BeginPlot("Posición del encoder [cuentas]", ImVec2(-1, 0), ImPlotFlags_NoLegend)) {
-        ejes(v, "cuentas", -100.0, 100.0);
-        decimar(v.hist, j0, i1, columnas, [](const Muestra &m) { return (double)m.posicion; }, xs, ys);
-        ImPlot::PlotLine("posición", xs.data(), ys.data(), (int)xs.size(), traza);
-        dibujar_cursores(v);
-        ImPlot::EndPlot();
-    }
-    if (ImPlot::BeginPlot("Duración de cada transferencia [us]", ImVec2(-1, 0))) {
-        ejes(v, "us", v.dt_log ? 50.0 : 0.0, 500.0);
-        if (v.dt_log) ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
-        ImPlot::SetupLegend(ImPlotLocation_North, ImPlotLegendFlags_Outside | ImPlotLegendFlags_Horizontal);
-        decimar(v.hist, j0, i1, columnas, [](const Muestra &m) { return (double)m.dt; }, xs, ys);
-        ImPlot::PlotLine("dt", xs.data(), ys.data(), (int)xs.size(), traza);
-        if (v.periodo_us > 0.0) {
-            ImPlot::PlotInfLines("periodo", &v.periodo_us, 1,
-                                 ImPlotSpec(ImPlotProp_LineColor, kGris,
-                                            ImPlotProp_Flags, ImPlotInfLinesFlags_Horizontal));
+    for (int i = 0; i < n; i++) {
+        switch (vis[i]) {
+        case DISP_U:
+            if (ImPlot::BeginPlot("Voltaje u [V]", ImVec2(-1, 0), ImPlotFlags_NoLegend)) {
+                ejes(v, "V", -2.75, 2.75);
+                decimar(v.hist, j0, i1, columnas, [](const Muestra &m) { return (double)m.u; }, xs, ys);
+                ImPlot::PlotLine("u", xs.data(), ys.data(), (int)xs.size(), traza);
+                dibujar_cursores(v);
+                ImPlot::EndPlot();
+            }
+            break;
+        case DISP_Y:
+            snprintf(titulo, sizeof titulo, "Posición [%s]", u);
+            if (ImPlot::BeginPlot(titulo, ImVec2(-1, 0), v.cerrado ? 0 : ImPlotFlags_NoLegend)) {
+                ejes(v, u, -100.0 / escala, 100.0 / escala);
+                ImPlot::SetupLegend(ImPlotLocation_NorthWest);
+                if (v.cerrado) {
+                    decimar(v.hist, j0, i1, columnas,
+                            [escala](const Muestra &m) { return (double)m.r / escala; }, xs, ys);
+                    ImPlot::PlotLine("r", xs.data(), ys.data(), (int)xs.size(), traza_r);
+                }
+                decimar(v.hist, j0, i1, columnas,
+                        [escala](const Muestra &m) { return (double)m.y / escala; }, xs, ys);
+                ImPlot::PlotLine("y", xs.data(), ys.data(), (int)xs.size(), traza);
+                dibujar_cursores(v);
+                ImPlot::EndPlot();
+            }
+            break;
+        case DISP_E:
+            snprintf(titulo, sizeof titulo, "Error e = r − y [%s]", u);
+            if (ImPlot::BeginPlot(titulo, ImVec2(-1, 0), ImPlotFlags_NoLegend)) {
+                ejes(v, u, -10.0 / escala, 10.0 / escala);
+                decimar(v.hist, j0, i1, columnas,
+                        [escala](const Muestra &m) { return ((double)m.r - m.y) / escala; }, xs, ys);
+                ImPlot::PlotLine("e", xs.data(), ys.data(), (int)xs.size(), traza);
+                dibujar_cursores(v);
+                ImPlot::EndPlot();
+            }
+            break;
+        case DISP_DT:
+            if (ImPlot::BeginPlot("Duración de cada transferencia [us]", ImVec2(-1, 0))) {
+                ejes(v, "us", v.dt_log ? 50.0 : 0.0, 500.0);
+                if (v.dt_log) ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
+                ImPlot::SetupLegend(ImPlotLocation_North, ImPlotLegendFlags_Outside | ImPlotLegendFlags_Horizontal);
+                decimar(v.hist, j0, i1, columnas, [](const Muestra &m) { return (double)m.dt; }, xs, ys);
+                ImPlot::PlotLine("dt", xs.data(), ys.data(), (int)xs.size(), traza);
+                if (v.periodo_us > 0.0) {
+                    ImPlot::PlotInfLines("periodo", &v.periodo_us, 1,
+                                         ImPlotSpec(ImPlotProp_LineColor, kGris,
+                                                    ImPlotProp_Flags, ImPlotInfLinesFlags_Horizontal));
+                }
+                for (int c = 0; c < CAT_NUM; c++) {
+                    const Marcas &m = v.marcas[c];
+                    const size_t a = std::lower_bound(m.t.begin(), m.t.end(), v.x_min) - m.t.begin();
+                    const size_t b = std::upper_bound(m.t.begin(), m.t.end(), v.x_max) - m.t.begin();
+                    if (b <= a) continue;
+                    ImPlot::PlotScatter(kCategorias[c], &m.t[a], &m.dt[a], (int)(b - a),
+                                        ImPlotSpec(ImPlotProp_Marker, kMarcaCategoria[c],
+                                                   ImPlotProp_MarkerSize, 5.0f,
+                                                   ImPlotProp_MarkerFillColor, kColorCategoria[c],
+                                                   ImPlotProp_MarkerLineColor, kColorCategoria[c],
+                                                   ImPlotProp_LineColor, kColorCategoria[c]));
+                }
+                if (v.disparo && v.estado_disparo != DISPARO_ARMADO) {
+                    ImPlot::TagX(v.t_disparo, kNaranja, "disparo");
+                }
+                dibujar_cursores(v);
+                ImPlot::EndPlot();
+            }
+            break;
         }
-        for (int c = 0; c < CAT_NUM; c++) {
-            const Marcas &m = v.marcas[c];
-            const size_t a = std::lower_bound(m.t.begin(), m.t.end(), v.x_min) - m.t.begin();
-            const size_t b = std::upper_bound(m.t.begin(), m.t.end(), v.x_max) - m.t.begin();
-            if (b <= a) continue;
-            ImPlot::PlotScatter(kCategorias[c], &m.t[a], &m.dt[a], (int)(b - a),
-                                ImPlotSpec(ImPlotProp_Marker, kMarcaCategoria[c],
-                                           ImPlotProp_MarkerSize, 5.0f,
-                                           ImPlotProp_MarkerFillColor, kColorCategoria[c],
-                                           ImPlotProp_MarkerLineColor, kColorCategoria[c],
-                                           ImPlotProp_LineColor, kColorCategoria[c]));
-        }
-        if (v.disparo && v.estado_disparo != DISPARO_ARMADO) {
-            ImPlot::TagX(v.t_disparo, kNaranja, "disparo");
-        }
-        dibujar_cursores(v);
-        ImPlot::EndPlot();
     }
     ImPlot::EndSubplots();
+    for (int i = 0; i < n; i++) v.filas[vis[i]] = filas[i];
     v.escalar_y = false;
 }
 
-/* Estadísticas de la ventana visible (como Signal Statistics) */
+/* Estadísticas de la ventana visible (como Signal Statistics) y medidas de
+ * los cursores (como Cursor Measurements) */
 static void estadisticas(Visor &v)
 {
     const size_t i0 = v.hist.buscar(v.x_min);
@@ -736,9 +1144,20 @@ static void estadisticas(Visor &v)
                        "errores %lu · atrasos %lu", n, mn, suma / n, (double)dts[k99], mx, errores,
                        atrasos);
     if (v.cursores) {
-        const double d = std::fabs(v.cursor[1] - v.cursor[0]);
-        ImGui::TextColored(kCian, "Cursores: %.4f s y %.4f s, Δt %.4f s (%.2f Hz)",
-                           v.cursor[0], v.cursor[1], d, d > 0.0 ? 1.0 / d : 0.0);
+        const double escala = v.modelo.escala();
+        double y[2], u[2];
+        for (int c = 0; c < 2; c++) {
+            const size_t i = std::min(v.hist.size() - 1, v.hist.buscar(v.cursor[c]));
+            y[c] = v.hist[i].y / escala;
+            u[c] = v.hist[i].u;
+        }
+        const double d = v.cursor[1] - v.cursor[0];
+        ImGui::TextColored(kCian, "C1 %.4f s: u %.3f V, y %.5g", v.cursor[0], u[0], y[0]);
+        ImGui::SameLine();
+        ImGui::TextColored(kMagenta, "  C2 %.4f s: u %.3f V, y %.5g", v.cursor[1], u[1], y[1]);
+        ImGui::SameLine();
+        ImGui::Text("  Δt %.4f s (%.3g Hz), Δy %.5g %s", d, d != 0.0 ? 1.0 / std::fabs(d) : 0.0,
+                    y[1] - y[0], unidad(v));
     }
 }
 
@@ -961,6 +1380,29 @@ static void ultima_trama(Visor &v)
 
 /* ---- Ventana principal -------------------------------------------------- */
 
+static void diagrama_modelo(Visor &v)
+{
+    static const char *const kModos[3] = {"dsPIC", "lazo FT2232H", "simulado"};
+    DatosDiagrama d;
+    d.cerrado = v.modelo.cerrado;
+    d.forma = v.modelo.cerrado ? v.modelo.referencia.forma : v.modelo.fuente.forma;
+    d.modo = kModos[v.conf.modo];
+    d.errores = prueba_errores(&v.inst.e.c);
+    d.atrasos = v.inst.atrasos;
+    d.unidad = unidad(v);
+    if (v.adq.activa() && v.hist.size() > 0) {
+        const Muestra &m = v.hist[v.hist.size() - 1];
+        const double escala = v.modelo.escala();
+        d.hay_valores = true;
+        d.u = m.u;
+        d.y = m.y / escala;
+        d.r = v.cerrado ? m.r / escala : NAN;
+        d.e = d.r - d.y;
+    }
+    const Bloque clic = diagrama(d, v.seleccion);
+    if (clic != BLOQUE_NINGUNO) v.seleccion = clic;
+}
+
 static void interfaz(Visor &v)
 {
     const ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -968,24 +1410,28 @@ static void interfaz(Visor &v)
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::Begin("visor", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_T)) alternar(v);
 
-    const float ancho_panel = ImGui::GetFontSize() * 28.0f;
+    barra(v);
+    ImGui::Separator();
+
+    const float alto_estado = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("medio", ImVec2(0, -alto_estado));
+    const float ancho_panel = ImGui::GetFontSize() * 27.0f;
     ImGui::BeginChild("panel", ImVec2(ancho_panel, 0), ImGuiChildFlags_Borders);
-    panel_prueba(v);
-    panel_estado(v);
-    panel_salida(v);
-    panel_vista(v);
-    panel_contadores(v);
-    ImGui::SeparatorText("Última trama");
-    ultima_trama(v);
+    inspector(v);
     ImGui::EndChild();
 
     ImGui::SameLine();
     ImGui::BeginChild("derecha", ImVec2(0, 0));
+    if (v.ver_diagrama) {
+        diagrama_modelo(v);
+        ImGui::Spacing();
+    }
     const float alto = ImGui::GetContentRegionAvail().y;
     const float divisor = ImGui::GetFontSize() * 0.5f;
-    const float min_displays = ImGui::GetFontSize() * 3 * 8.0f;
-    const float min_pestanas = ImGui::GetFontSize() * 12.0f;
+    const float min_displays = ImGui::GetFontSize() * 3 * 6.0f;
+    const float min_pestanas = ImGui::GetFontSize() * 6.0f;
     float alto_displays = alto * v.fraccion_displays;
     alto_displays = std::max(std::min(alto_displays, alto - min_pestanas - divisor), min_displays);
     ImGui::BeginChild("displays", ImVec2(0, alto_displays));
@@ -1000,7 +1446,7 @@ static void interfaz(Visor &v)
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
     }
     if (ImGui::IsItemActive() && alto > 0.0f) {
-        v.fraccion_displays = std::max(0.2f, std::min(0.9f,
+        v.fraccion_displays = std::max(0.2f, std::min(0.95f,
                                        v.fraccion_displays + ImGui::GetIO().MouseDelta.y / alto));
     }
     {
@@ -1026,6 +1472,9 @@ static void interfaz(Visor &v)
         ImGui::EndTabBar();
     }
     ImGui::EndChild();
+    ImGui::EndChild();
+
+    barra_estado(v);
     ImGui::End();
 }
 
@@ -1105,6 +1554,15 @@ static void error_glfw(int codigo, const char *texto)
     fprintf(stderr, "GLFW %d: %s\n", codigo, texto);
 }
 
+static void uso(const char *programa)
+{
+    fprintf(stderr,
+            "Uso: %s [-n tramas | -tf s] [-periodo us] [-reloj Hz] [-lazo | -simulado]\n"
+            "       [-cerrado] [-kp V] [-ki V] [-kd V] [-salida]\n"
+            "       [-registro archivo.csv] [-iniciar] [-salir] [-captura archivo.ppm]\n",
+            programa);
+}
+
 int main(int argc, char **argv)
 {
     Visor *v = new Visor;
@@ -1115,7 +1573,11 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-n") && i + 1 < argc) {
-            v->conf.tramas = strtoul(argv[++i], NULL, 10);
+            v->tramas_fin = strtoul(argv[++i], NULL, 10);
+            v->fin = v->tramas_fin > 0 ? FIN_TRAMAS : FIN_NUNCA;
+        } else if (!strcmp(argv[i], "-tf") && i + 1 < argc) {
+            v->tiempo_final = atof(argv[++i]);
+            v->fin = v->tiempo_final > 0.0 ? FIN_TIEMPO : FIN_NUNCA;
         } else if (!strcmp(argv[i], "-periodo") && i + 1 < argc) {
             v->conf.periodo_us = atof(argv[++i]);
         } else if (!strcmp(argv[i], "-reloj") && i + 1 < argc) {
@@ -1129,6 +1591,16 @@ int main(int argc, char **argv)
 #endif
         } else if (!strcmp(argv[i], "-simulado")) {
             v->conf.modo = MODO_SIMULADO;
+        } else if (!strcmp(argv[i], "-cerrado")) {
+            v->modelo.cerrado = true;
+        } else if (!strcmp(argv[i], "-kp") && i + 1 < argc) {
+            v->modelo.pid.kp = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "-ki") && i + 1 < argc) {
+            v->modelo.pid.ki = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "-kd") && i + 1 < argc) {
+            v->modelo.pid.kd = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "-salida")) {
+            v->conf.salida = true;
         } else if (!strcmp(argv[i], "-iniciar")) {
             iniciar_al_abrir = true;
         } else if (!strcmp(argv[i], "-salir")) {
@@ -1136,9 +1608,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "-captura") && i + 1 < argc) {
             captura = argv[++i];
         } else {
-            fprintf(stderr, "Uso: %s [-n tramas] [-periodo us] [-reloj Hz] [-lazo | -simulado]\n"
-                            "       [-registro archivo.csv] [-iniciar] [-salir] [-captura archivo.ppm]\n",
-                    argv[0]);
+            uso(argv[0]);
             return 2;
         }
     }
@@ -1187,6 +1657,7 @@ int main(int argc, char **argv)
     ImGui_ImplGlfw_InitForOpenGL(ventana, true);
     ImGui_ImplOpenGL3_Init(NULL);
 
+    v->adq.modelo(v->modelo);
     if (iniciar_al_abrir) {
         iniciar(*v);
         if (salir && !v->iniciada) {

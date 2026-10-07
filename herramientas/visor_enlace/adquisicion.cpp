@@ -2,46 +2,44 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #ifndef _WIN32
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
 #endif
 
-double Generador::voltaje(double t) const
+std::string Generador::descripcion(const char *unidad) const
 {
-    const double fase = frecuencia > 0.0 ? t * frecuencia - std::floor(t * frecuencia) : 0.0;
-    double v = 0.0;
-    switch (forma) {
-    case FORMA_NADA:
-        return 0.0;
-    case FORMA_ESCALON:
-        v = amplitud;
-        break;
-    case FORMA_RAMPA:
-        v = amplitud * (fase < 0.5 ? -1.0 + 4.0 * fase : 3.0 - 4.0 * fase);
-        break;
-    case FORMA_SENO:
-        v = amplitud * std::sin(2.0 * M_PI * fase);
-        break;
-    case FORMA_CUADRADA:
-        v = fase < 0.5 ? amplitud : -amplitud;
-        break;
-    default:
-        break;
+    char buf[200];
+    if (forma == FORMA_NADA) return "nada (0)";
+    if (forma == FORMA_ESCALON) {
+        snprintf(buf, sizeof buf, "escalón de %g a %g %s en t = %g s", desplazamiento,
+                 amplitud + desplazamiento, unidad, retardo);
+    } else {
+        snprintf(buf, sizeof buf, "%s, amplitud %g %s, frecuencia %g Hz, desplazamiento %g %s",
+                 kFormas[forma], amplitud, unidad, frecuencia, desplazamiento, unidad);
+        if (retardo > 0.0) {
+            const size_t n = strlen(buf);
+            snprintf(buf + n, sizeof buf - n, ", desde t = %g s", retardo);
+        }
     }
-    return v + desplazamiento;
+    return buf;
 }
 
-std::string Generador::descripcion() const
+std::string descripcion_modelo(const Modelo &m)
 {
-    char buf[160];
-    if (forma == FORMA_NADA) return "nada (0 V)";
-    if (forma == FORMA_ESCALON) {
-        snprintf(buf, sizeof buf, "escalón de %g V al habilitar la salida", amplitud + desplazamiento);
+    char buf[400];
+    if (!m.cerrado) {
+        snprintf(buf, sizeof buf, "lazo abierto, fuente %s, saturación [%g, %g] V",
+                 m.fuente.descripcion("V").c_str(), m.u_min, m.u_max);
     } else {
-        snprintf(buf, sizeof buf, "%s, amplitud %g V, frecuencia %g Hz, desplazamiento %g V",
-                 kFormas[forma], amplitud, frecuencia, desplazamiento);
+        snprintf(buf, sizeof buf,
+                 "lazo cerrado, referencia %s (%g cuentas/vuelta), PID kp %g ki %g kd %g N %g%s, "
+                 "saturación [%g, %g] V",
+                 m.referencia.descripcion(kUnidades[m.unidad]).c_str(), m.cuentas_por_vuelta,
+                 m.pid.kp, m.pid.ki, m.pid.kd, m.pid.n, m.pid.d_medicion ? " (D sobre y)" : "",
+                 m.u_min, m.u_max);
     }
     return buf;
 }
@@ -73,6 +71,10 @@ std::string comando_equivalente(const Configuracion &conf)
         snprintf(buf, sizeof buf, " -n %lu", conf.tramas);
         s += buf;
     }
+    if (conf.duracion_s > 0.0) {
+        snprintf(buf, sizeof buf, " -tf %g", conf.duracion_s);
+        s += buf;
+    }
     if (conf.periodo_us > 0.0) {
         snprintf(buf, sizeof buf, " -periodo %g", conf.periodo_us);
         s += buf;
@@ -99,10 +101,11 @@ bool Adquisicion::iniciar(const Configuracion &conf)
         std::string visor;
         {
             std::lock_guard<std::mutex> l(mutex_);
-            visor = "señal " + generador_.descripcion();
+            visor = descripcion_modelo(modelo_);
         }
-        visor += "; la salida arranca deshabilitada y se habilita durante la prueba"
-                 " (bit 0 del byte flags de mosi)";
+        visor += conf_.salida ? "; salida habilitada desde el inicio"
+                              : "; la salida arranca deshabilitada y se habilita durante la prueba";
+        visor += " (bit 0 del byte flags de mosi)";
         registro_encabezado(registro_, comando_equivalente(conf_).c_str(), visor.c_str());
     }
 
@@ -118,8 +121,9 @@ bool Adquisicion::iniciar(const Configuracion &conf)
         }
     }
 
-    salida = false;
+    salida = conf_.salida;
     reset_encoder = false;
+    cero = false;
     sim_reinicio = false;
     escritura_ = 0;
     lectura_ = 0;
@@ -149,7 +153,7 @@ bool Adquisicion::activa()
     return corriendo_;
 }
 
-size_t Adquisicion::extraer(Trama *destino, size_t max)
+size_t Adquisicion::extraer(Paso *destino, size_t max)
 {
     const size_t r = lectura_.load(std::memory_order_relaxed);
     const size_t w = escritura_.load(std::memory_order_acquire);
@@ -162,11 +166,11 @@ size_t Adquisicion::extraer(Trama *destino, size_t max)
     return n;
 }
 
-void Adquisicion::generador(const Generador &g)
+void Adquisicion::modelo(const Modelo &m)
 {
     std::lock_guard<std::mutex> l(mutex_);
-    generador_ = g;
-    version_generador_++;
+    modelo_ = m;
+    version_modelo_++;
 }
 
 std::string Adquisicion::aviso_tiempo_real()
@@ -225,31 +229,69 @@ void Adquisicion::ciclo()
     local.atrasos = 0;
 
     tiempo_real();
-    Generador gen;
+    Modelo mod;
+    ControladorPid pid;
     unsigned version = ~0u;
     bool salida_anterior = false;
-    double t_habilitada = 0.0;
+    double t_habilitada = 0.0, t_anterior = 0.0;
+
+    /* Posición: la última válida y el origen, en cuentas del QEI */
+    int32_t crudo = 0, origen = 0;
+    bool hay_origen = false;
+    bool reset_pendiente = false;
+    unsigned long k_reset = 0;
 
     const double inicio = reloj_us();
     double siguiente = inicio;
 
     for (unsigned long k = 0; (conf_.tramas == 0 || k < conf_.tramas) && !detener_; k++) {
-        Trama t;
+        Paso p;
+        Trama &t = p.t;
         const bool sal = salida;
         /* Tiempo de la prueba: k Ts con periodo fijo, de pared sin él */
         const double t_s = conf_.periodo_us > 0.0 ? k * conf_.periodo_us * 1e-6
                                                   : (reloj_us() - inicio) * 1e-6;
-        if (version_generador_ != version) {
+        if (conf_.duracion_s > 0.0 && t_s > conf_.duracion_s) break;
+        if (version_modelo_ != version) {
             std::lock_guard<std::mutex> l(mutex_);
-            gen = generador_;
-            version = version_generador_;
-            t_habilitada = t_s;
+            const Modelo &nuevo = modelo_;
+            if (nuevo.fuente != mod.fuente || nuevo.referencia != mod.referencia ||
+                nuevo.cerrado != mod.cerrado || version == ~0u) {
+                t_habilitada = t_s;
+            }
+            if (nuevo.cerrado != mod.cerrado) pid.reiniciar();
+            mod = nuevo;
+            version = version_modelo_;
         }
-        if (sal && !salida_anterior) t_habilitada = t_s;
+        if (sal && !salida_anterior) {
+            t_habilitada = t_s;
+            pid.reiniciar();
+        }
         salida_anterior = sal;
-        const uint16_t dac = sal ? daq_voltaje_a_dac(gen.voltaje(t_s - t_habilitada)) : aleatorio();
+        if (cero.exchange(false)) origen = crudo;
+        p.y = (int32_t)((uint32_t)crudo - (uint32_t)origen);
+        p.r = NAN;
+
+        /* El modelo calcula el voltaje con la posición que llegó en la trama anterior */
+        const double h = conf_.periodo_us > 0.0 ? conf_.periodo_us * 1e-6 : t_s - t_anterior;
+        t_anterior = t_s;
+        uint16_t dac;
+        if (!sal) {
+            dac = aleatorio();
+        } else if (mod.cerrado) {
+            const double escala = mod.escala();
+            const double r = mod.referencia.valor(t_s - t_habilitada);
+            p.r = (float)(r * escala);
+            dac = daq_voltaje_a_dac(pid.paso(mod, r, p.y / escala, h));
+        } else {
+            dac = daq_voltaje_a_dac(mod.saturar(mod.fuente.valor(t_s - t_habilitada)));
+        }
         uint8_t flags = sal ? DAQ_FLAG_SALIDA_HAB : 0u;
-        if (reset_encoder.exchange(false)) flags |= DAQ_FLAG_RESET_ENC;
+        if (reset_encoder.exchange(false)) {
+            flags |= DAQ_FLAG_RESET_ENC;
+            reset_pendiente = true;
+            k_reset = k;
+        }
         DWORD n = 0;
         FT_STATUS st;
 
@@ -281,9 +323,22 @@ void Adquisicion::ciclo()
         if (conf_.periodo_us > 0.0 && t.dt_us > conf_.periodo_us) local.atrasos++;
         registrar(registro_, &t);
 
+        /* La respuesta de la trama k + 1 ya refleja el reset enviado en la k */
+        if (t.status >= 0) {
+            crudo = t.posicion;
+            if (reset_pendiente && k > k_reset) {
+                reset_pendiente = false;
+                origen = 0;
+            }
+            if (!hay_origen) {
+                hay_origen = true;
+                origen = crudo;
+            }
+        }
+
         const size_t w = escritura_.load(std::memory_order_relaxed);
         if (w - lectura_.load(std::memory_order_acquire) < kCapacidad) {
-            anillo_[w & (kCapacidad - 1)] = t;
+            anillo_[w & (kCapacidad - 1)] = p;
             escritura_.store(w + 1, std::memory_order_release);
         } else {
             descartadas_++;

@@ -23,6 +23,7 @@
 #include "mpsse_linux.h"
 #endif
 #include "../../protocolo/daq_protocolo.h"
+#include "../../protocolo/daq_canal.h"
 
 static const DWORD kOpciones = SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE |
@@ -248,7 +249,7 @@ static inline void registrar(FILE *f, const Trama *t)
     fputc('\n', f);
 }
 
-/* Abre el canal 0 como maestro SPI en modo 0 con SCK = reloj. Con lazo (sólo
+/* Abre la interfaz A (daq_canal.h) como maestro SPI en modo 0 con SCK = reloj. Con lazo (sólo
  * en Linux) une MOSI con MISO dentro del FT2232H. Si falla, deja el motivo en
  * error y devuelve false. */
 static inline bool enlace_abrir(DWORD reloj, bool lazo, FT_HANDLE *h, char *error, size_t n)
@@ -262,8 +263,8 @@ static inline bool enlace_abrir(DWORD reloj, bool lazo, FT_HANDLE *h, char *erro
         Cleanup_libMPSSE();
         return false;
     }
-    if (SPI_OpenChannel(0, h) != FT_OK) {
-        snprintf(error, n, "No se pudo abrir el canal 0 (¿está en uso?).");
+    if (SPI_OpenChannel(daq_canal_a(canales), h) != FT_OK) {
+        snprintf(error, n, "No se pudo abrir la interfaz A (¿está en uso?).");
         Cleanup_libMPSSE();
         return false;
     }

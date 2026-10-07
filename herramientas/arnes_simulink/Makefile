@@ -32,7 +32,7 @@ obj/SIMULINK/DaqPic/daq_bloques.h: ../../SIMULINK/DaqPic/daq_bloques.h
 	cp $< $@
 
 obj/%.o: obj/SIMULINK/DaqPic/%.cpp obj/SIMULINK/DaqPic/daq_bloques.h $(SIM) \
-         ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h
+         ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h ../../protocolo/daq_canal.h
 	$(CXX) $(CXXFLAGS) -Isimulacion $(FTDI_CFLAGS) -c $< -o $@
 
 # Los bloques con los nombres anteriores incluyen el .cpp del bloque nuevo

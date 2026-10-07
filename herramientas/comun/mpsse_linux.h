@@ -124,6 +124,26 @@ static FT_STATUS SPI_GetNumChannels(DWORD *canales)
     return FT_OK;
 }
 
+typedef struct {
+    DWORD Flags;
+    DWORD Type;
+    DWORD ID;
+    DWORD LocId;
+    char SerialNumber[16];
+    char Description[64];
+    FT_HANDLE ftHandle;
+} FT_DEVICE_LIST_INFO_NODE;
+
+/* Aquí cada canal es la interfaz A de un dispositivo, así que el número de
+ * serie termina en 'A' como lo reporta D2XX en Windows */
+static FT_STATUS SPI_GetChannelInfo(DWORD indice, FT_DEVICE_LIST_INFO_NODE *info)
+{
+    memset(info, 0, sizeof *info);
+    snprintf(info->SerialNumber, sizeof info->SerialNumber, "%uA", (unsigned)indice);
+    snprintf(info->Description, sizeof info->Description, "Canal A");
+    return FT_OK;
+}
+
 /* Abre el canal A del dispositivo número indice, contando todos los
  * identificadores aceptados en el orden de kMpsseIds */
 static FT_STATUS SPI_OpenChannel(DWORD indice, FT_HANDLE *h)

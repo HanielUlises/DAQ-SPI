@@ -30,6 +30,7 @@
 #include "ftd2xx.h"
 #include "libmpsse_spi.h"
 #include "../../protocolo/daq_protocolo.h"
+#include "../../protocolo/daq_canal.h"
 
 #define PARAM_TS            0
 #define PARAM_TIEMPO_REAL   1
@@ -163,8 +164,8 @@ static void mdlStart(SimStruct *S)
         ssSetErrorStatus(S, "daqPic: no se detecto ningun FT2232H.");
         return;
     }
-    if (SPI_OpenChannel(0, &e->handle) != FT_OK) {
-        ssSetErrorStatus(S, "daqPic: no se pudo abrir el canal 0 del FT2232H "
+    if (SPI_OpenChannel(daq_canal_a(canales), &e->handle) != FT_OK) {
+        ssSetErrorStatus(S, "daqPic: no se pudo abrir la interfaz A del FT2232H "
                             "(lo usa otro programa o modelo?).");
         return;
     }
@@ -260,7 +261,10 @@ static void mdlUpdate(SimStruct *S, int_T tid)
 
 static void mdlTerminate(SimStruct *S)
 {
-    Estado *e = (Estado *)ssGetPWork(S)[0];
+    /* Al evaluar los parámetros del bloque (set_param, el diálogo) Simulink
+     * llama a mdlTerminate sin haber llamado a mdlStart y sin PWork */
+    void **pwork = ssGetPWork(S);
+    Estado *e = pwork ? (Estado *)pwork[0] : NULL;
     if (e == NULL) {
         return;
     }

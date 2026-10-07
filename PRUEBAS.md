@@ -214,6 +214,18 @@ Workspace*. Se conservan los contadores `Errores` y `Atrasos`, la tabla de
 tramas con error (con la respuesta esperada y el status de la respuesta
 siguiente) y el mapa de bits erróneos.
 
+Para comparar con Simulink, `SIMULINK/DaqPic/crear_modelo_pid.m` construye
+el mismo lazo cerrado con `daqPic` y el *Discrete PID Controller*, con los
+mismos valores por omisión que el visor, y guarda `t`, `u`, `y`, `r`, `e`,
+`errores`, `atrasos` y `escala` en MAT 4. El bloque Scope del visor (o
+`-comparar archivo.mat`) superpone ese archivo, o uno exportado por el
+propio visor, a la corrida en curso e indica la diferencia RMS de `y`:
+
+```
+>> crear_modelo_pid('correr', true, 'archivo', 'pid_simulink.mat')   % en MATLAB
+visor_enlace -periodo 1000 -tf 10 -cerrado -kp 0.003 -salida -comparar pid_simulink.mat
+```
+
 La salida arranca deshabilitada (0 V) salvo con `-salida`; al habilitarla,
 el generador y el PID arrancan desde t = 0. Requiere GLFW y OpenGL (Fedora:
 `glfw-devel mesa-libGL-devel`) además de libftdi1.
@@ -227,7 +239,7 @@ make -C herramientas/visor_enlace prueba             # pruebas sin hardware
 ```
 
 Las pruebas sin hardware cubren `bits.h`, el generador, el PID, la
-exportación y el lazo cerrado completo contra el simulador del dsPIC y de un
+exportación y la lectura de .mat y .csv, y el lazo cerrado completo contra el simulador del dsPIC y de un
 motor de primer orden.
 
 ### Batería de pruebas

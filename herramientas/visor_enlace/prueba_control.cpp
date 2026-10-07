@@ -181,6 +181,88 @@ static void prueba_exportar(void)
     VERIFICA(!error.empty());
 }
 
+static void prueba_importar(void)
+{
+    std::vector<Columna> c(3), l;
+    c[0].nombre = "t";
+    c[0].datos = {0.0, 0.001, 0.002};
+    c[1].nombre = "y";
+    c[1].datos = {1.5, NAN, -2.0};
+    c[2].nombre = "escala";
+    c[2].datos = {11.25};
+    std::string error;
+
+    /* Ida y vuelta en MAT 4 */
+    const char *mat = "prueba_importar.mat";
+    VERIFICA(exportar_senales(mat, c, "", error));
+    VERIFICA(importar_senales(mat, l, error));
+    VERIFICA(l.size() == 3);
+    if (l.size() == 3) {
+        VERIFICA(l[0].nombre == "t" && l[0].datos == c[0].datos);
+        VERIFICA(l[1].datos[0] == 1.5 && std::isnan(l[1].datos[1]) && l[1].datos[2] == -2.0);
+        const Columna *e = buscar_columna(l, "escala");
+        VERIFICA(e != NULL && e->datos.size() == 1 && e->datos[0] == 11.25);
+    }
+    VERIFICA(buscar_columna(l, "r") == NULL);
+
+    /* Variables de otros tipos, como las que MATLAB guarda con save -v4: single
+     * (tipo 10), int32 (20), uint8 (50) y una de texto (51) que se ignora */
+    FILE *f = fopen(mat, "wb");
+    VERIFICA(f != NULL);
+    if (f != NULL) {
+        const int32_t hs[5] = {10, 2, 1, 0, 2};
+        const float fs[2] = {0.5f, -1.25f};
+        const int32_t hi[5] = {20, 1, 2, 0, 2};
+        const int32_t is[2] = {-7, 100000};
+        const int32_t hb[5] = {50, 1, 1, 0, 2};
+        const uint8_t bs[1] = {200};
+        const int32_t ht[5] = {51, 1, 3, 0, 2};
+        const uint8_t ts[3] = {'a', 'b', 'c'};
+        fwrite(hs, sizeof hs, 1, f); fwrite("a", 2, 1, f); fwrite(fs, sizeof fs, 1, f);
+        fwrite(hi, sizeof hi, 1, f); fwrite("b", 2, 1, f); fwrite(is, sizeof is, 1, f);
+        fwrite(ht, sizeof ht, 1, f); fwrite("x", 2, 1, f); fwrite(ts, sizeof ts, 1, f);
+        fwrite(hb, sizeof hb, 1, f); fwrite("c", 2, 1, f); fwrite(bs, sizeof bs, 1, f);
+        fclose(f);
+    }
+    VERIFICA(importar_senales(mat, l, error));
+    VERIFICA(l.size() == 3);
+    if (l.size() == 3) {
+        VERIFICA(l[0].nombre == "a" && l[0].datos[0] == 0.5 && l[0].datos[1] == -1.25);
+        VERIFICA(l[1].nombre == "b" && l[1].datos[0] == -7.0 && l[1].datos[1] == 100000.0);
+        VERIFICA(l[2].nombre == "c" && l[2].datos[0] == 200.0);
+    }
+
+    /* MAT 5 y archivos truncados se rechazan con un motivo */
+    f = fopen(mat, "wb");
+    if (f != NULL) {
+        fputs("MATLAB 5.0 MAT-file, Platform: PCWIN64", f);
+        fclose(f);
+    }
+    VERIFICA(!importar_senales(mat, l, error) && error.find("-v4") != std::string::npos);
+    f = fopen(mat, "wb");
+    if (f != NULL) {
+        const int32_t h[5] = {0, 10, 1, 0, 2};
+        fwrite(h, sizeof h, 1, f);
+        fwrite("t", 2, 1, f);
+        fclose(f);
+    }
+    VERIFICA(!importar_senales(mat, l, error));
+    remove(mat);
+
+    /* Ida y vuelta en CSV, con la escala en el comentario */
+    const char *csv = "prueba_importar.csv";
+    std::vector<Columna> d(c.begin(), c.begin() + 2);
+    VERIFICA(exportar_senales(csv, d, "visor\nescala = 11.25", error));
+    VERIFICA(importar_senales(csv, l, error));
+    const Columna *t = buscar_columna(l, "t"), *y = buscar_columna(l, "y"), *e = buscar_columna(l, "escala");
+    VERIFICA(t != NULL && t->datos == d[0].datos);
+    VERIFICA(y != NULL && y->datos.size() == 3 && std::isnan(y->datos[1]) && y->datos[2] == -2.0);
+    VERIFICA(e != NULL && e->datos[0] == 11.25);
+    remove(csv);
+
+    VERIFICA(!importar_senales("/no/existe.csv", l, error));
+}
+
 /* Corre el hilo de adquisición en modo simulado y junta todos los pasos */
 static std::vector<Paso> correr(Adquisicion &a, const Configuracion &conf,
                                 void (*durante)(Adquisicion &, const std::vector<Paso> &) = NULL)
@@ -325,6 +407,7 @@ int main(void)
     prueba_pid_integral();
     prueba_pid_derivada();
     prueba_exportar();
+    prueba_importar();
     prueba_lazo_abierto_sin_salida();
     prueba_lazo_cerrado();
     prueba_origen();

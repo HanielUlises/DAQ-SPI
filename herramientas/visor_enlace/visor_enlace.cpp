@@ -14,15 +14,18 @@
  * de prueba_enlace, disparo por error, cursores, el mapa de bits erróneos
  * contra la respuesta esperada (bits.h, misma lógica que herramientas/reporte),
  * el registro CSV compatible con herramientas/reporte y la exportación de las
- * señales a .mat o .csv, como To Workspace (exportar.h).
+ * señales a .mat o .csv, como To Workspace (exportar.h). Un .mat o .csv con
+ * t, u, y y r, por ejemplo el que guarda SIMULINK/DaqPic/crear_modelo_pid.m,
+ * se superpone en el Scope para comparar Simulink con el visor.
  *
  * El eje de tiempo es k Ts cuando hay periodo fijo y tiempo de pared cuando
  * las tramas se envían lo más rápido posible.
  *
  * Uso: visor_enlace [-n tramas | -tf s] [-periodo us] [-reloj Hz] [-lazo | -simulado]
  *                   [-cerrado] [-kp V] [-ki V] [-kd V] [-salida]
- *                   [-registro archivo.csv] [-iniciar] [-salir] [-captura archivo.ppm]
- * -tf fija el tiempo final en segundos. -cerrado arranca en lazo cerrado con
+ *                   [-registro archivo.csv] [-comparar archivo.mat] [-iniciar] [-salir]
+ *                   [-captura archivo.ppm]
+ * -comparar abre un archivo para superponerlo en el Scope. -tf fija el tiempo final en segundos. -cerrado arranca en lazo cerrado con
  * las ganancias dadas (en V por cuenta). -salida habilita la salida desde la
  * primera trama. -iniciar arranca la prueba al abrir. -salir cierra el visor
  * al terminar la prueba, imprime el resumen y devuelve 0 sin errores, 1 con
@@ -107,19 +110,20 @@ private:
 };
 
 /* Reduce las muestras [i0, i1) a mínimo y máximo por columna, para que los
- * picos de una serie larga no desaparezcan al graficarla */
-template <class F>
-static void decimar(const Historial &h, size_t i0, size_t i1, int columnas, F valor,
-                    std::vector<double> &xs, std::vector<double> &ys)
+ * picos de una serie larga no desaparezcan al graficarla. tiempo(i) y
+ * valor(i) dan la muestra i. */
+template <class T, class F>
+static void decimar_serie(size_t i0, size_t i1, int columnas, T tiempo, F valor,
+                          std::vector<double> &xs, std::vector<double> &ys)
 {
     xs.clear();
     ys.clear();
-    const size_t n = i1 - i0;
+    const size_t n = i1 > i0 ? i1 - i0 : 0;
     if (columnas < 1) columnas = 1;
     if (n <= (size_t)columnas * 2) {
         for (size_t i = i0; i < i1; i++) {
-            xs.push_back(h[i].t);
-            ys.push_back(valor(h[i]));
+            xs.push_back(tiempo(i));
+            ys.push_back(valor(i));
         }
         return;
     }
@@ -129,20 +133,107 @@ static void decimar(const Historial &h, size_t i0, size_t i1, int columnas, F va
         size_t b = std::min(i1, i0 + (size_t)((c + 1) * paso));
         if (a >= b) continue;
         size_t imin = a, imax = a;
-        double vmin = valor(h[a]), vmax = vmin;
+        double vmin = valor(a), vmax = vmin;
         for (size_t i = a + 1; i < b; i++) {
-            const double v = valor(h[i]);
+            const double v = valor(i);
             if (v < vmin || std::isnan(vmin)) { vmin = v; imin = i; }
             if (v > vmax || std::isnan(vmax)) { vmax = v; imax = i; }
         }
         const size_t p = std::min(imin, imax), q = std::max(imin, imax);
-        xs.push_back(h[p].t);
-        ys.push_back(valor(h[p]));
+        xs.push_back(tiempo(p));
+        ys.push_back(valor(p));
         if (q != p) {
-            xs.push_back(h[q].t);
-            ys.push_back(valor(h[q]));
+            xs.push_back(tiempo(q));
+            ys.push_back(valor(q));
         }
     }
+}
+
+template <class F>
+static void decimar(const Historial &h, size_t i0, size_t i1, int columnas, F valor,
+                    std::vector<double> &xs, std::vector<double> &ys)
+{
+    decimar_serie(i0, i1, columnas, [&h](size_t i) { return h[i].t; },
+                  [&h, &valor](size_t i) { return (double)valor(h[i]); }, xs, ys);
+}
+
+/* ---- Archivo para comparar ---------------------------------------------- */
+
+/* Señales leídas de un .mat o .csv (t en s, u en V, y y r en cuentas) */
+struct Comparacion {
+    std::string nombre;
+    std::vector<double> t, u, y, r;
+    double desfase = 0.0;               /* s que se suman al tiempo del archivo */
+
+    bool cargada() const { return !t.empty(); }
+
+    /* Rango [i0, i1) de muestras visibles en [x_min, x_max], con una de margen */
+    void rango(double x_min, double x_max, size_t &i0, size_t &i1) const
+    {
+        i0 = std::lower_bound(t.begin(), t.end(), x_min - desfase) - t.begin();
+        i1 = std::upper_bound(t.begin(), t.end(), x_max - desfase) - t.begin();
+        if (i0 > 0) i0--;
+        if (i1 < t.size()) i1++;
+    }
+
+    void decimar(const std::vector<double> &v, double factor, double x_min, double x_max,
+                 int columnas, std::vector<double> &xs, std::vector<double> &ys) const
+    {
+        size_t i0, i1;
+        rango(x_min, x_max, i0, i1);
+        decimar_serie(i0, i1, columnas, [this](size_t i) { return t[i] + desfase; },
+                      [&v, factor](size_t i) { return v[i] * factor; }, xs, ys);
+    }
+};
+
+/* Lee ruta en c; las variables y y r están en la unidad de la variable
+ * escala (cuentas por unidad), o en cuentas si no está */
+static bool cargar_comparacion(Comparacion &c, const std::string &ruta, std::string &mensaje)
+{
+    std::vector<Columna> columnas;
+    std::string error;
+    if (!importar_senales(ruta, columnas, error)) {
+        mensaje = error;
+        return false;
+    }
+    const Columna *t = buscar_columna(columnas, "t");
+    if (t == NULL) t = buscar_columna(columnas, "tout");
+    const Columna *u = buscar_columna(columnas, "u");
+    const Columna *y = buscar_columna(columnas, "y");
+    const Columna *r = buscar_columna(columnas, "r");
+    const Columna *e = buscar_columna(columnas, "escala");
+    if (t == NULL || t->datos.empty() || (u == NULL && y == NULL)) {
+        mensaje = ruta + " no tiene t y al menos u o y.";
+        return false;
+    }
+    const size_t n = t->datos.size();
+    for (size_t i = 1; i < n; i++) {
+        if (!(t->datos[i] >= t->datos[i - 1])) {
+            mensaje = "El tiempo de " + ruta + " no es creciente.";
+            return false;
+        }
+    }
+    const double escala = e != NULL && !e->datos.empty() && e->datos[0] > 0.0 ? e->datos[0] : 1.0;
+    Comparacion nueva;
+    nueva.nombre = ruta;
+    nueva.desfase = c.desfase;
+    nueva.t = t->datos;
+    /* Las que no tienen el largo de t se ignoran */
+    if (u != NULL && u->datos.size() == n) nueva.u = u->datos;
+    if (y != NULL && y->datos.size() == n) {
+        nueva.y = y->datos;
+        for (double &x : nueva.y) x *= escala;
+    }
+    if (r != NULL && r->datos.size() == n) {
+        nueva.r = r->datos;
+        for (double &x : nueva.r) x *= escala;
+    }
+    char buf[200];
+    snprintf(buf, sizeof buf, "%zu muestras de %.4g a %.4g s:%s%s%s", n, nueva.t.front(), nueva.t.back(),
+             nueva.u.empty() ? "" : " u", nueva.y.empty() ? "" : " y", nueva.r.empty() ? "" : " r");
+    mensaje = buf;
+    c = nueva;
+    return true;
 }
 
 /* ---- Tramas con error, por categoría ------------------------------------ */
@@ -272,6 +363,12 @@ struct Visor {
     float filas[DISP_NUM] = {1.0f, 1.2f, 0.8f, 1.0f};
     float fraccion_displays = 0.74f;    /* alto de los displays sobre el panel derecho */
     bool terminada = false;             /* la prueba terminó y ya se extrajeron todas sus tramas */
+
+    /* Archivo superpuesto en el Scope */
+    Comparacion comparacion;
+    std::string ruta_comparar = "pid_simulink.mat";
+    std::string mensaje_comparar;
+    bool error_comparar = false;
 
     /* Exportación (To Workspace) */
     std::string ruta_exportar = "senales.mat";
@@ -425,7 +522,8 @@ static void exportar(Visor &v)
         i1 = v.hist.buscar(v.x_max);
     }
     const double escala = v.modelo.escala();
-    std::vector<Columna> c(6);
+    const bool mat = termina_en(v.ruta_exportar, ".mat");
+    std::vector<Columna> c(mat ? 7 : 6);
     c[0].nombre = "t";
     c[1].nombre = "u";
     c[2].nombre = "y";
@@ -442,12 +540,19 @@ static void exportar(Visor &v)
         c[4].datos.push_back(r - y);
         c[5].datos.push_back(m.dt * 1e-6);
     }
+    /* Cuentas por unidad de posición: en el .mat como variable, en el CSV como comentario */
+    if (mat) {
+        c[6].nombre = "escala";
+        c[6].datos.push_back(escala);
+    }
     char buf[200];
     snprintf(buf, sizeof buf,
              "visor_enlace: t [s], u [V], y y r [%s], e = r - y, dt [s] (duración de la transferencia)\n"
              "r y e valen NaN sin lazo cerrado con la salida habilitada",
              unidad(v));
-    const std::string comentario = buf + std::string("\n") + descripcion_modelo(v.modelo);
+    std::string comentario = buf + std::string("\n") + descripcion_modelo(v.modelo);
+    snprintf(buf, sizeof buf, "\nescala = %.17g", escala);
+    comentario += buf;
     std::string error;
     if (exportar_senales(v.ruta_exportar, c, comentario, error)) {
         snprintf(buf, sizeof buf, "%zu muestras en %s", i1 - i0, v.ruta_exportar.c_str());
@@ -852,6 +957,39 @@ static void inspector_scope(Visor &v)
     for (int d = 0; d < DISP_NUM; d++) ImGui::Checkbox(kDisplays[d], &v.mostrar[d]);
     if (!v.cerrado) ImGui::TextDisabled("r y e sólo existen en lazo cerrado.");
 
+    ImGui::SeparatorText("Comparar con un archivo");
+    char ruta_cmp[256];
+    snprintf(ruta_cmp, sizeof ruta_cmp, "%s", v.ruta_comparar.c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##comparar", ruta_cmp, sizeof ruta_cmp)) v.ruta_comparar = ruta_cmp;
+    if (ImGui::Button("Cargar")) {
+        v.error_comparar = !cargar_comparacion(v.comparacion, v.ruta_comparar, v.mensaje_comparar);
+    }
+    ayuda(".mat en MAT 4 (save -v4, como el de SIMULINK/DaqPic/crear_modelo_pid.m) o .csv con las "
+          "variables t [s], u [V], y y r; y y r en la unidad de la variable escala (cuentas por "
+          "unidad) o en cuentas. Se grafica en verde y naranja sobre la corrida del visor.");
+    if (v.comparacion.cargada()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Quitar")) {
+            v.comparacion = Comparacion();
+            v.mensaje_comparar.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Ajustar vista")) {
+            v.seguir = false;
+            v.x_min = v.comparacion.t.front() + v.comparacion.desfase;
+            v.x_max = v.comparacion.t.back() + v.comparacion.desfase;
+            v.escalar_y = true;
+        }
+        entrada("desfase [s]", &v.comparacion.desfase, "%.4g");
+        ayuda("Se suma al tiempo del archivo para alinearlo con la corrida del visor.");
+    }
+    if (!v.mensaje_comparar.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(v.error_comparar ? kRojo : kGris, "%s", v.mensaje_comparar.c_str());
+        ImGui::PopTextWrapPos();
+    }
+
     ImGui::SeparatorText("To Workspace");
     char ruta[256];
     snprintf(ruta, sizeof ruta, "%s", v.ruta_exportar.c_str());
@@ -1011,6 +1149,10 @@ static void displays(Visor &v, float alto)
     static std::vector<double> xs, ys;
     const ImPlotSpec traza(ImPlotProp_LineColor, kAmarillo, ImPlotProp_LineWeight, 1.5f);
     const ImPlotSpec traza_r(ImPlotProp_LineColor, kAzul, ImPlotProp_LineWeight, 1.5f);
+    const ImPlotSpec traza_archivo(ImPlotProp_LineColor, kVerde, ImPlotProp_LineWeight, 1.5f);
+    const ImPlotSpec traza_archivo_r(ImPlotProp_LineColor, kNaranja, ImPlotProp_LineWeight, 1.5f);
+    const Comparacion &cmp = v.comparacion;
+    const bool hay_cmp = cmp.cargada();
     const double escala = v.modelo.escala();
     const char *u = unidad(v);
     char titulo[96];
@@ -1020,7 +1162,7 @@ static void displays(Visor &v, float alto)
     float filas[DISP_NUM];
     int n = 0;
     for (int d = 0; d < DISP_NUM; d++) {
-        if (!v.mostrar[d] || (d == DISP_E && !v.cerrado)) continue;
+        if (!v.mostrar[d] || (d == DISP_E && !v.cerrado && !(hay_cmp && !cmp.r.empty()))) continue;
         vis[n] = d;
         filas[n++] = v.filas[d];
     }
@@ -1035,17 +1177,22 @@ static void displays(Visor &v, float alto)
     for (int i = 0; i < n; i++) {
         switch (vis[i]) {
         case DISP_U:
-            if (ImPlot::BeginPlot("Voltaje u [V]", ImVec2(-1, 0), ImPlotFlags_NoLegend)) {
+            if (ImPlot::BeginPlot("Voltaje u [V]", ImVec2(-1, 0), hay_cmp ? 0 : ImPlotFlags_NoLegend)) {
                 ejes(v, "V", -2.75, 2.75);
+                ImPlot::SetupLegend(ImPlotLocation_NorthWest);
                 decimar(v.hist, j0, i1, columnas, [](const Muestra &m) { return (double)m.u; }, xs, ys);
                 ImPlot::PlotLine("u", xs.data(), ys.data(), (int)xs.size(), traza);
+                if (hay_cmp && !cmp.u.empty()) {
+                    cmp.decimar(cmp.u, 1.0, v.x_min, v.x_max, columnas, xs, ys);
+                    ImPlot::PlotLine("u (archivo)", xs.data(), ys.data(), (int)xs.size(), traza_archivo);
+                }
                 dibujar_cursores(v);
                 ImPlot::EndPlot();
             }
             break;
         case DISP_Y:
             snprintf(titulo, sizeof titulo, "Posición [%s]", u);
-            if (ImPlot::BeginPlot(titulo, ImVec2(-1, 0), v.cerrado ? 0 : ImPlotFlags_NoLegend)) {
+            if (ImPlot::BeginPlot(titulo, ImVec2(-1, 0), v.cerrado || hay_cmp ? 0 : ImPlotFlags_NoLegend)) {
                 ejes(v, u, -100.0 / escala, 100.0 / escala);
                 ImPlot::SetupLegend(ImPlotLocation_NorthWest);
                 if (v.cerrado) {
@@ -1056,17 +1203,33 @@ static void displays(Visor &v, float alto)
                 decimar(v.hist, j0, i1, columnas,
                         [escala](const Muestra &m) { return (double)m.y / escala; }, xs, ys);
                 ImPlot::PlotLine("y", xs.data(), ys.data(), (int)xs.size(), traza);
+                if (hay_cmp && !cmp.r.empty()) {
+                    cmp.decimar(cmp.r, 1.0 / escala, v.x_min, v.x_max, columnas, xs, ys);
+                    ImPlot::PlotLine("r (archivo)", xs.data(), ys.data(), (int)xs.size(), traza_archivo_r);
+                }
+                if (hay_cmp && !cmp.y.empty()) {
+                    cmp.decimar(cmp.y, 1.0 / escala, v.x_min, v.x_max, columnas, xs, ys);
+                    ImPlot::PlotLine("y (archivo)", xs.data(), ys.data(), (int)xs.size(), traza_archivo);
+                }
                 dibujar_cursores(v);
                 ImPlot::EndPlot();
             }
             break;
         case DISP_E:
             snprintf(titulo, sizeof titulo, "Error e = r − y [%s]", u);
-            if (ImPlot::BeginPlot(titulo, ImVec2(-1, 0), ImPlotFlags_NoLegend)) {
+            if (ImPlot::BeginPlot(titulo, ImVec2(-1, 0), hay_cmp ? 0 : ImPlotFlags_NoLegend)) {
                 ejes(v, u, -10.0 / escala, 10.0 / escala);
+                ImPlot::SetupLegend(ImPlotLocation_NorthWest);
                 decimar(v.hist, j0, i1, columnas,
                         [escala](const Muestra &m) { return ((double)m.r - m.y) / escala; }, xs, ys);
                 ImPlot::PlotLine("e", xs.data(), ys.data(), (int)xs.size(), traza);
+                if (hay_cmp && !cmp.r.empty() && !cmp.y.empty()) {
+                    size_t a, b;
+                    cmp.rango(v.x_min, v.x_max, a, b);
+                    decimar_serie(a, b, columnas, [&cmp](size_t i) { return cmp.t[i] + cmp.desfase; },
+                                  [&cmp, escala](size_t i) { return (cmp.r[i] - cmp.y[i]) / escala; }, xs, ys);
+                    ImPlot::PlotLine("e (archivo)", xs.data(), ys.data(), (int)xs.size(), traza_archivo);
+                }
                 dibujar_cursores(v);
                 ImPlot::EndPlot();
             }
@@ -1143,6 +1306,26 @@ static void estadisticas(Visor &v)
     ImGui::TextWrapped("Ventana: %zu tramas · dt mín %.0f, media %.0f, p99 %.0f, máx %.0f us · "
                        "errores %lu · atrasos %lu", n, mn, suma / n, (double)dts[k99], mx, errores,
                        atrasos);
+    const Comparacion &cmp = v.comparacion;
+    if (cmp.cargada() && !cmp.y.empty()) {
+        /* y del visor contra la muestra del archivo más cercana en tiempo */
+        double suma2 = 0.0, maximo = 0.0;
+        size_t cuenta = 0, j = 0;
+        for (size_t i = i0; i < i1; i++) {
+            const double t = v.hist[i].t - cmp.desfase;
+            while (j + 1 < cmp.t.size() && std::fabs(cmp.t[j + 1] - t) <= std::fabs(cmp.t[j] - t)) j++;
+            if (std::fabs(cmp.t[j] - t) > 0.5 * std::max(v.periodo_us * 1e-6, 1e-4)) continue;
+            const double d = (v.hist[i].y - cmp.y[j]) / v.modelo.escala();
+            if (!std::isfinite(d)) continue;
+            suma2 += d * d;
+            maximo = std::max(maximo, std::fabs(d));
+            cuenta++;
+        }
+        if (cuenta > 0) {
+            ImGui::TextColored(kVerde, "y visor − archivo en la ventana: RMS %.4g, máx |Δ| %.4g %s (%zu muestras)",
+                               std::sqrt(suma2 / cuenta), maximo, unidad(v), cuenta);
+        }
+    }
     if (v.cursores) {
         const double escala = v.modelo.escala();
         double y[2], u[2];
@@ -1435,7 +1618,8 @@ static void interfaz(Visor &v)
     float alto_displays = alto * v.fraccion_displays;
     alto_displays = std::max(std::min(alto_displays, alto - min_pestanas - divisor), min_displays);
     ImGui::BeginChild("displays", ImVec2(0, alto_displays));
-    const float alto_estadisticas = ImGui::GetTextLineHeightWithSpacing() * (v.cursores ? 3.2f : 2.2f);
+    const float alto_estadisticas = ImGui::GetTextLineHeightWithSpacing() *
+                                    (2.2f + (v.cursores ? 1.0f : 0.0f) + (v.comparacion.cargada() ? 1.0f : 0.0f));
     displays(v, ImGui::GetContentRegionAvail().y - alto_estadisticas);
     estadisticas(v);
     ImGui::EndChild();
@@ -1559,7 +1743,8 @@ static void uso(const char *programa)
     fprintf(stderr,
             "Uso: %s [-n tramas | -tf s] [-periodo us] [-reloj Hz] [-lazo | -simulado]\n"
             "       [-cerrado] [-kp V] [-ki V] [-kd V] [-salida]\n"
-            "       [-registro archivo.csv] [-iniciar] [-salir] [-captura archivo.ppm]\n",
+            "       [-registro archivo.csv] [-comparar archivo.mat] [-iniciar] [-salir]\n"
+            "       [-captura archivo.ppm]\n",
             programa);
 }
 
@@ -1601,6 +1786,10 @@ int main(int argc, char **argv)
             v->modelo.pid.kd = atof(argv[++i]);
         } else if (!strcmp(argv[i], "-salida")) {
             v->conf.salida = true;
+        } else if (!strcmp(argv[i], "-comparar") && i + 1 < argc) {
+            v->ruta_comparar = argv[++i];
+            v->error_comparar = !cargar_comparacion(v->comparacion, v->ruta_comparar, v->mensaje_comparar);
+            if (v->error_comparar) fprintf(stderr, "%s\n", v->mensaje_comparar.c_str());
         } else if (!strcmp(argv[i], "-iniciar")) {
             iniciar_al_abrir = true;
         } else if (!strcmp(argv[i], "-salir")) {

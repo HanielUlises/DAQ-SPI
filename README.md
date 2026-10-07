@@ -298,6 +298,28 @@ que con `daqPic`. `crear_modelo_bloques.m` construye el modelo de prueba
 equivalente. Ninguna de las dos versiones debe combinarse con la otra ni con
 los bloques anteriores en el mismo modelo.
 
+#### Bloques con los nombres anteriores
+
+`initializePic`, `escribirPic` y `leerPic` (en la misma carpeta) son los tres
+bloques anteriores con la lógica de `daqPicInicio`, `daqPicEscribir` y
+`daqPicLeer`, para usar sin cambios los modelos existentes (`MergedPic.slx`,
+`ReadPicModificado.slx`, `WritePicModificado.slx`): mismos nombres, sin
+parámetros y con los puertos en el mismo orden. Se compilan desde el mismo
+código fuente con `DAQ_INTERFAZ_ANTERIOR`.
+
+| Bloque | Entradas | Salidas |
+|---|---|---|
+| `initializePic` | — | llave |
+| `escribirPic` | voltaje [V]; llave | — |
+| `leerPic` | llave | posición |
+
+`initializePic` hereda el periodo del modelo, que debe usar un solver de paso
+fijo, y siempre se sincroniza con el reloj de la PC. Como `leerPic` sólo
+entrega la posición, `initializePic` escribe en la ventana de comandos, al
+terminar la simulación, los pasos, los errores de comunicación y los pasos
+atrasados. Para que MATLAB use estos bloques y no los anteriores, la simulación
+debe ejecutarse con `SIMULINK/DaqPic` como carpeta actual.
+
 `herramientas/arnes_simulink` ejecuta los cuatro bloques en Linux, sin MATLAB,
 contra la tarjeta: los llama en el orden de Simulink, con una pausa de 300 ms
 antes del primer paso, y verifica puertos, periodos, llaves inválidas, el

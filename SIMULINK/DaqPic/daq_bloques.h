@@ -15,6 +15,10 @@
  * daqPicInicio: la dirección del estado expresada como double. En Windows x64
  * las direcciones de usuario ocupan 47 bits y el double las representa sin
  * pérdida; daqPicInicio lo verifica al arrancar.
+ *
+ * initializePic, escribirPic y leerPic son los mismos tres bloques con la
+ * interfaz de los bloques anteriores (DAQ_INTERFAZ_ANTERIOR), para usar los
+ * modelos existentes sin cambiarlos: mismos nombres, puertos y orden.
  */
 #ifndef DAQ_BLOQUES_H
 #define DAQ_BLOQUES_H
@@ -31,6 +35,17 @@
 #endif
 
 #define DAQ_BLOQUES_MAGIA 0x44415150u   /* "DAQP" */
+
+/* Nombre del bloque para los mensajes */
+#define DAQ_STR2(x) #x
+#define DAQ_STR(x) DAQ_STR2(x)
+#define DAQ_NOMBRE DAQ_STR(S_FUNCTION_NAME)
+
+#ifdef DAQ_INTERFAZ_ANTERIOR
+#define DAQ_NOMBRE_INICIO "initializePic"
+#else
+#define DAQ_NOMBRE_INICIO "daqPicInicio"
+#endif
 
 struct EstadoDaq {
     uint32_t magia;         /* DAQ_BLOQUES_MAGIA mientras el estado es válido */

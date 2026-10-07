@@ -14,7 +14,7 @@ CXXFLAGS ?= -std=c++17 -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-parame
 FTDI_CFLAGS ?= $(shell pkg-config --cflags libftdi1)
 FTDI_LIBS   ?= $(shell pkg-config --libs libftdi1)
 
-BLOQUES = daqPic daqPicInicio daqPicEscribir daqPicLeer
+BLOQUES = daqPic daqPicInicio daqPicEscribir daqPicLeer initializePic escribirPic leerPic
 FUENTES = $(addprefix ../../SIMULINK/DaqPic/,$(addsuffix .cpp,$(BLOQUES)) daq_bloques.h)
 SIM     = $(wildcard simulacion/*.h)
 OBJS    = $(addprefix obj/,$(addsuffix .o,$(BLOQUES))) obj/arnes.o
@@ -34,6 +34,11 @@ obj/SIMULINK/DaqPic/daq_bloques.h: ../../SIMULINK/DaqPic/daq_bloques.h
 obj/%.o: obj/SIMULINK/DaqPic/%.cpp obj/SIMULINK/DaqPic/daq_bloques.h $(SIM) \
          ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h
 	$(CXX) $(CXXFLAGS) -Isimulacion $(FTDI_CFLAGS) -c $< -o $@
+
+# Los bloques con los nombres anteriores incluyen el .cpp del bloque nuevo
+obj/initializePic.o: obj/SIMULINK/DaqPic/daqPicInicio.cpp
+obj/escribirPic.o: obj/SIMULINK/DaqPic/daqPicEscribir.cpp
+obj/leerPic.o: obj/SIMULINK/DaqPic/daqPicLeer.cpp
 
 obj/arnes.o: arnes.cpp $(SIM) ../../SIMULINK/DaqPic/daq_bloques.h
 	@mkdir -p obj

@@ -123,7 +123,8 @@ En MATLAB:
 
 ```matlab
 cd SIMULINK/DaqPic
-compilar                % genera daqPic, daqPicInicio, daqPicEscribir y daqPicLeer
+compilar                % genera daqPic, daqPicInicio, daqPicEscribir, daqPicLeer,
+                        % initializePic, escribirPic y leerPic
 crear_modelo            % genera y abre DaqPicPrueba.slx (un bloque)
 crear_modelo_bloques    % genera y abre DaqPicBloquesPrueba.slx (tres bloques)
 ```
@@ -141,15 +142,23 @@ voltaje aplicado, lo que debe considerarse en el diseño del controlador.
 
 `DaqPicBloquesPrueba.slx` es el mismo modelo con `daqPicInicio`,
 `daqPicEscribir` y `daqPicLeer` (ver el README); se ejecuta igual y sus
-indicadores también deben permanecer en 0. Antes de pasar a Windows, los
-cuatro bloques pueden probarse en Linux con
+indicadores también deben permanecer en 0.
+
+Los modelos anteriores (`MergedPic.slx`, `ReadPicModificado.slx`,
+`WritePicModificado.slx`) funcionan con el firmware nuevo sin cambios a través
+de `initializePic`, `escribirPic` y `leerPic`, siempre que `SIMULINK/DaqPic` sea
+la carpeta actual (si no, MATLAB toma los `.mexw64` anteriores de la carpeta
+del modelo). Al terminar, la ventana de comandos debe mostrar 0 errores y 0
+pasos atrasados.
+
+Antes de pasar a Windows, los bloques pueden probarse en Linux con
 `make -C herramientas/arnes_simulink correr`.
 
 ## Regresar al firmware anterior
 
 Copiar `MPLAB/dsPicController.X/dist/default/production/dsPicController.X.production.hex`
-a la unidad `CURIOSITY`. Los modelos anteriores (`MergedPic`, `ReadPicModificado`,
-`WritePicModificado`) sólo funcionan con ese firmware.
+a la unidad `CURIOSITY`. Los bloques anteriores compilados en `MergedPic`,
+`ReadPicModificado` y `WritePicModificado` sólo funcionan con ese firmware.
 
 ## Resultados a registrar
 

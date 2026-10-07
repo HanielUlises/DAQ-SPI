@@ -10,13 +10,28 @@
  *
  * Debe haber un solo bloque daqPicEscribir por modelo.
  *
+ * escribirPic.cpp compila este archivo con DAQ_INTERFAZ_ANTERIOR, con las
+ * entradas en el orden de escribirPic: 1) voltaje; 2) llave de initializePic.
+ *
  * Compilación: compilar.m
  */
+#ifndef S_FUNCTION_NAME
 #define S_FUNCTION_NAME  daqPicEscribir
+#endif
 #define S_FUNCTION_LEVEL 2
 
 #include "simstruc.h"
 #include "daq_bloques.h"
+
+#ifdef DAQ_INTERFAZ_ANTERIOR
+#define ENTRADA_VOLTAJE 0
+#define ENTRADA_LLAVE   1
+#define MENSAJE_LLAVE   DAQ_NOMBRE ": la entrada 2 debe conectarse a la salida de initializePic."
+#else
+#define ENTRADA_LLAVE   0
+#define ENTRADA_VOLTAJE 1
+#define MENSAJE_LLAVE   DAQ_NOMBRE ": la entrada 1 debe conectarse a la salida de daqPicInicio."
+#endif
 
 static void mdlInitializeSizes(SimStruct *S)
 {
@@ -41,7 +56,7 @@ static void mdlInitializeSizes(SimStruct *S)
     ssSetNumContStates(S, 0);
     ssSetNumDiscStates(S, 0);
     ssSetNumSampleTimes(S, 1);
-    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE);
+    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE | SS_OPTION_DISALLOW_CONSTANT_SAMPLE_TIME);
 }
 
 static void mdlInitializeSampleTimes(SimStruct *S)
@@ -57,14 +72,13 @@ static void mdlOutputs(SimStruct *S, int_T tid)
         return;
     }
 
-    EstadoDaq *e = daq_estado(*ssGetInputPortRealSignal(S, 0));
+    EstadoDaq *e = daq_estado(*ssGetInputPortRealSignal(S, ENTRADA_LLAVE));
     if (e == NULL) {
-        ssSetErrorStatus(S, "daqPicEscribir: la entrada 1 debe conectarse a la salida "
-                            "de daqPicInicio.");
+        ssSetErrorStatus(S, MENSAJE_LLAVE);
         return;
     }
 
-    e->dac = daq_voltaje_a_dac(*ssGetInputPortRealSignal(S, 1));
+    e->dac = daq_voltaje_a_dac(*ssGetInputPortRealSignal(S, ENTRADA_VOLTAJE));
     e->salida = true;
 }
 

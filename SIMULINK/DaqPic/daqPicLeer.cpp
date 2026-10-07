@@ -10,13 +10,25 @@
  *           2) errores de comunicación acumulados;
  *           3) pasos atrasados respecto al tiempo real.
  *
+ * leerPic.cpp compila este archivo con DAQ_INTERFAZ_ANTERIOR, con la única
+ * salida de leerPic, la posición; los errores y los atrasos los reporta
+ * initializePic al terminar la simulación.
+ *
  * Compilación: compilar.m
  */
+#ifndef S_FUNCTION_NAME
 #define S_FUNCTION_NAME  daqPicLeer
+#endif
 #define S_FUNCTION_LEVEL 2
 
 #include "simstruc.h"
 #include "daq_bloques.h"
+
+#ifdef DAQ_INTERFAZ_ANTERIOR
+#define NUM_SALIDAS 1
+#else
+#define NUM_SALIDAS 3
+#endif
 
 static void mdlInitializeSizes(SimStruct *S)
 {
@@ -34,8 +46,8 @@ static void mdlInitializeSizes(SimStruct *S)
     ssSetInputPortDirectFeedThrough(S, 0, 1);
     ssSetInputPortRequiredContiguous(S, 0, 1);
 
-    if (!ssSetNumOutputPorts(S, 3)) return;
-    for (int i = 0; i < 3; i++) {
+    if (!ssSetNumOutputPorts(S, NUM_SALIDAS)) return;
+    for (int i = 0; i < NUM_SALIDAS; i++) {
         ssSetOutputPortWidth(S, i, 1);
         ssSetOutputPortDataType(S, i, SS_DOUBLE);
         ssSetOutputPortComplexSignal(S, i, COMPLEX_NO);
@@ -44,7 +56,7 @@ static void mdlInitializeSizes(SimStruct *S)
     ssSetNumContStates(S, 0);
     ssSetNumDiscStates(S, 0);
     ssSetNumSampleTimes(S, 1);
-    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE);
+    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE | SS_OPTION_DISALLOW_CONSTANT_SAMPLE_TIME);
 }
 
 static void mdlInitializeSampleTimes(SimStruct *S)
@@ -62,14 +74,16 @@ static void mdlOutputs(SimStruct *S, int_T tid)
 
     const EstadoDaq *e = daq_estado(*ssGetInputPortRealSignal(S, 0));
     if (e == NULL) {
-        ssSetErrorStatus(S, "daqPicLeer: la entrada debe conectarse a la salida "
-                            "de daqPicInicio.");
+        ssSetErrorStatus(S, DAQ_NOMBRE ": la entrada debe conectarse a la salida de "
+                            DAQ_NOMBRE_INICIO ".");
         return;
     }
 
     ssGetOutputPortRealSignal(S, 0)[0] = e->posicion;
+#ifndef DAQ_INTERFAZ_ANTERIOR
     ssGetOutputPortRealSignal(S, 1)[0] = e->errores;
     ssGetOutputPortRealSignal(S, 2)[0] = e->atrasos;
+#endif
 }
 
 static void mdlTerminate(SimStruct *S)

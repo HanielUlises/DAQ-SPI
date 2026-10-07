@@ -9,12 +9,18 @@
  *
  * Al iniciar pone en cero el encoder y verifica que el dsPIC responda con el
  * protocolo nuevo. Al terminar la simulación envía una trama con la salida
- * deshabilitada (0 V). Sin un bloque daqPicEscribir en el modelo, la salida
+ * deshabilitada (0 V) y escribe en la ventana de comandos los pasos, los
+ * errores y los atrasos. Sin un bloque daqPicEscribir en el modelo, la salida
  * permanece deshabilitada.
+ *
+ * initializePic.cpp compila este archivo con DAQ_INTERFAZ_ANTERIOR: sin
+ * parámetros, con el periodo heredado del modelo y siempre en tiempo real.
  *
  * Compilación: compilar.m
  */
+#ifndef S_FUNCTION_NAME
 #define S_FUNCTION_NAME  daqPicInicio
+#endif
 #define S_FUNCTION_LEVEL 2
 
 #define NOMINMAX
@@ -22,13 +28,18 @@
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 #include "ftd2xx.h"
 #include "libmpsse_spi.h"
 #include "daq_bloques.h"
 
 #define PARAM_TS            0
 #define PARAM_TIEMPO_REAL   1
+#ifdef DAQ_INTERFAZ_ANTERIOR
+#define NUM_PARAMS          0
+#else
 #define NUM_PARAMS          2
+#endif
 
 static const DWORD kOpciones = SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES |
                                SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE |
@@ -81,6 +92,7 @@ static bool transferir(Estado *e, uint16_t dac, uint8_t flags, uint8_t *status)
 
 /* ------------------------------------------------------------------------- */
 
+#ifndef DAQ_INTERFAZ_ANTERIOR
 #define MDL_CHECK_PARAMETERS
 static void mdlCheckParameters(SimStruct *S)
 {
@@ -96,6 +108,7 @@ static void mdlCheckParameters(SimStruct *S)
         return;
     }
 }
+#endif
 
 static void mdlInitializeSizes(SimStruct *S)
 {
@@ -104,6 +117,9 @@ static void mdlInitializeSizes(SimStruct *S)
     if (ssGetNumSFcnParams(S) != ssGetSFcnParamsCount(S)) {
         return;
     }
+#endif
+#ifndef DAQ_INTERFAZ_ANTERIOR
+#if defined(MATLAB_MEX_FILE)
     mdlCheckParameters(S);
     if (ssGetErrorStatus(S) != NULL) {
         return;
@@ -111,6 +127,7 @@ static void mdlInitializeSizes(SimStruct *S)
 #endif
     ssSetSFcnParamTunable(S, PARAM_TS, SS_PRM_NOT_TUNABLE);
     ssSetSFcnParamTunable(S, PARAM_TIEMPO_REAL, SS_PRM_NOT_TUNABLE);
+#endif
 
     if (!ssSetNumInputPorts(S, 0)) return;
 
@@ -123,12 +140,17 @@ static void mdlInitializeSizes(SimStruct *S)
     ssSetNumDiscStates(S, 0);
     ssSetNumSampleTimes(S, 1);
     ssSetNumPWork(S, 1);
-    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE | SS_OPTION_CALL_TERMINATE_ON_EXIT);
+    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE | SS_OPTION_CALL_TERMINATE_ON_EXIT |
+                    SS_OPTION_DISALLOW_CONSTANT_SAMPLE_TIME);
 }
 
 static void mdlInitializeSampleTimes(SimStruct *S)
 {
+#ifdef DAQ_INTERFAZ_ANTERIOR
+    ssSetSampleTime(S, 0, INHERITED_SAMPLE_TIME);
+#else
     ssSetSampleTime(S, 0, mxGetScalar(ssGetSFcnParam(S, PARAM_TS)));
+#endif
     ssSetOffsetTime(S, 0, 0.0);
 }
 
@@ -139,11 +161,27 @@ static void mdlStart(SimStruct *S)
     ssGetPWork(S)[0] = e;
 
     e->comun.dac = DAQ_DAC_CERO;
+#ifdef DAQ_INTERFAZ_ANTERIOR
+    /* El periodo heredado ya está resuelto. Si el bloque quedó en tiempo
+     * continuo (sin bloques discretos en el modelo) se ejecuta en cada paso
+     * del solver, que debe ser de paso fijo. */
+    e->ts = ssGetSampleTime(S, 0);
+    if (!(e->ts > 0.0 && isfinite(e->ts))) {
+        if (ssIsVariableStepSolver(S)) {
+            ssSetErrorStatus(S, DAQ_NOMBRE ": el modelo debe usar un solver de paso fijo "
+                                "(Configuration Parameters > Solver > Fixed-step).");
+            return;
+        }
+        e->ts = ssGetFixedStepSize(S);
+    }
+    e->tiempo_real = true;
+#else
     e->ts = mxGetScalar(ssGetSFcnParam(S, PARAM_TS));
     e->tiempo_real = mxGetScalar(ssGetSFcnParam(S, PARAM_TIEMPO_REAL)) != 0.0;
+#endif
 
     if ((uintptr_t)daq_llave(&e->comun) != (uintptr_t)&e->comun) {
-        ssSetErrorStatus(S, "daqPicInicio: la direccion del estado no cabe en un double.");
+        ssSetErrorStatus(S, DAQ_NOMBRE ": la direccion del estado no cabe en un double.");
         return;
     }
 
@@ -152,11 +190,11 @@ static void mdlStart(SimStruct *S)
 
     DWORD canales = 0;
     if (SPI_GetNumChannels(&canales) != FT_OK || canales == 0) {
-        ssSetErrorStatus(S, "daqPicInicio: no se detecto ningun FT2232H.");
+        ssSetErrorStatus(S, DAQ_NOMBRE ": no se detecto ningun FT2232H.");
         return;
     }
     if (SPI_OpenChannel(0, &e->handle) != FT_OK) {
-        ssSetErrorStatus(S, "daqPicInicio: no se pudo abrir el canal 0 del FT2232H "
+        ssSetErrorStatus(S, DAQ_NOMBRE ": no se pudo abrir el canal 0 del FT2232H "
                             "(lo usa otro programa o modelo?).");
         return;
     }
@@ -169,7 +207,7 @@ static void mdlStart(SimStruct *S)
     conf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 |
                          SPI_CONFIG_OPTION_CS_ACTIVELOW;
     if (SPI_InitChannel(e->handle, &conf) != FT_OK) {
-        ssSetErrorStatus(S, "daqPicInicio: fallo la inicializacion del canal SPI.");
+        ssSetErrorStatus(S, DAQ_NOMBRE ": fallo la inicializacion del canal SPI.");
         return;
     }
 
@@ -179,7 +217,7 @@ static void mdlStart(SimStruct *S)
     uint8_t status = 0;
     (void)transferir(e, DAQ_DAC_CERO, DAQ_FLAG_RESET_ENC, &status);
     if (!transferir(e, DAQ_DAC_CERO, 0u, &status)) {
-        ssSetErrorStatus(S, "daqPicInicio: el dsPIC no respondio con el protocolo esperado. "
+        ssSetErrorStatus(S, DAQ_NOMBRE ": el dsPIC no respondio con el protocolo esperado. "
                             "Verifique que tenga cargado el firmware dsPicDaq y las "
                             "conexiones SPI.");
         return;
@@ -257,6 +295,10 @@ static void mdlTerminate(SimStruct *S)
         return;
     }
     e->comun.magia = 0u;
+    if (e->paso > 0) {
+        ssPrintf("%s: %u pasos de %g s, %.0f errores de comunicacion, %.0f pasos atrasados\n",
+                 DAQ_NOMBRE, (unsigned)e->paso, e->ts, e->comun.errores, e->comun.atrasos);
+    }
     if (e->abierto) {
         uint8_t status = 0;
         (void)transferir(e, DAQ_DAC_CERO, 0u, &status);

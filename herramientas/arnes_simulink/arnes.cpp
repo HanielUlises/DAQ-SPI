@@ -4,11 +4,13 @@
  * todos los mdlUpdate, y al final mdlTerminate. */
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <unistd.h>
 #include "simulacion/arnes.h"
 #include "../../SIMULINK/DaqPic/daq_bloques.h"
 
 extern SFuncion sfun_daqPic, sfun_daqPicInicio, sfun_daqPicEscribir, sfun_daqPicLeer;
+extern SFuncion sfun_initializePic, sfun_escribirPic, sfun_leerPic;
 
 static int fallas = 0;
 static void revisar(bool ok, const char *que)
@@ -131,12 +133,90 @@ static void prueba_bloques(int pasos, bool con_escritura)
     (void)llave;
 }
 
+static double segundos()
+{
+    timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + 1e-9 * t.tv_nsec;
+}
+
+/* initializePic, escribirPic y leerPic conectados como en MergedPic.slx: sin
+ * parámetros, llave en la entrada 2 de escribirPic, una sola salida en leerPic
+ * y el periodo heredado del solver de paso fijo (0.001 s), que Simulink
+ * resuelve como tiempo continuo porque no hay bloques discretos. */
+static void prueba_anteriores(int pasos)
+{
+    printf("initializePic + escribirPic + leerPic (interfaz anterior), %d pasos a 1 kHz\n", pasos);
+    SimStruct Si, Se, Sl;
+    preparar(sfun_initializePic, Si, 0, 0);
+    preparar(sfun_escribirPic, Se, 0, 0);
+    preparar(sfun_leerPic, Sl, 0, 0);
+    revisar(Si.nin == 0 && Si.nout == 1 && Se.nin == 2 && Se.nout == 0 &&
+            Sl.nin == 1 && Sl.nout == 1, "puertos como los bloques anteriores");
+    revisar(Si.ts == INHERITED_SAMPLE_TIME && Se.ts == INHERITED_SAMPLE_TIME &&
+            Sl.ts == INHERITED_SAMPLE_TIME, "periodos heredados");
+
+    Si.ts = 0.0;
+    Si.paso_variable = true;
+    sfun_initializePic.inicio(&Si);
+    revisar(Si.error != NULL, "initializePic rechaza un solver de paso variable");
+    sfun_initializePic.terminar(&Si);
+    Si.error = NULL;
+    Si.paso_variable = false;
+    Si.paso_fijo = 0.001;
+
+    sfun_initializePic.inicio(&Si);
+    revisar(Si.error == NULL, Si.error ? Si.error : "mdlStart sin error");
+    if (Si.error) { sfun_initializePic.terminar(&Si); return; }
+    usleep(300000);
+
+    /* La llave en la entrada 1 (el orden de daqPicEscribir) debe rechazarse */
+    sfun_initializePic.salidas(&Si, 0);
+    Se.in[0][0] = Si.out[0][0];
+    Se.in[1][0] = 0.5;
+    sfun_escribirPic.salidas(&Se, 0);
+    revisar(Se.error != NULL, "escribirPic rechaza la llave en la entrada 1");
+    Se.error = NULL;
+
+    bool dac_ok = true;
+    double errores = -1, atrasos = -1, atrasos_paso1 = -1;
+    const double t0 = segundos();
+    for (int k = 0; k < pasos; k++) {
+        sfun_initializePic.salidas(&Si, 0);
+        Se.in[0][0] = voltaje(k);
+        Se.in[1][0] = Sl.in[0][0] = Si.out[0][0];
+        sfun_escribirPic.salidas(&Se, 0);
+        sfun_leerPic.salidas(&Sl, 0);
+        if (k == 0) revisar(Sl.out[0][0] == 0.0, "posición 0 en el primer paso");
+        const EstadoDaq *e = daq_estado(Si.out[0][0]);
+        if (e == NULL || e->dac != daq_voltaje_a_dac(voltaje(k)) || !e->salida) {
+            dac_ok = false;
+        }
+        sfun_initializePic.actualizar(&Si, 0);
+        if (e != NULL) { errores = e->errores; atrasos = e->atrasos; }
+        if (k == 1) atrasos_paso1 = atrasos;
+    }
+    const double duracion = segundos() - t0;
+    printf("  posición %.0f, errores %.0f, atrasos %.0f, %.3f s\n",
+           Sl.out[0][0], errores, atrasos, duracion);
+    revisar(Se.error == NULL && Sl.error == NULL, "escribirPic y leerPic aceptan la llave");
+    revisar(dac_ok, "el voltaje de la entrada 1 llega al estado antes de transferir");
+    revisar(atrasos_paso1 == 0.0, "la pausa de inicialización no cuenta como atraso");
+    revisar(errores == 0.0, "sin errores (la vigilancia de la pausa no cuenta)");
+    revisar(duracion > 0.98 * pasos * 0.001, "sincronizado con el reloj al periodo del solver");
+    sfun_escribirPic.terminar(&Se);
+    sfun_leerPic.terminar(&Sl);
+    sfun_initializePic.terminar(&Si);
+    revisar(Si.pwork[0] == NULL, "mdlTerminate de initializePic libera el estado");
+}
+
 int main(int argc, char **argv)
 {
     const int pasos = argc > 1 ? atoi(argv[1]) : 10000;
     prueba_daqpic(pasos);
     prueba_bloques(pasos, true);
     prueba_bloques(pasos / 10, false);
+    prueba_anteriores(pasos);
     printf(fallas ? "\n%d FALLAS\n" : "\nTODO CORRECTO\n", fallas);
     return fallas != 0;
 }

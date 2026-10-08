@@ -217,6 +217,86 @@ GND & GND (junto a RB10) & GND & terminal 6 (GND) \\
 \label{tab:conexiones}
 \end{table}
 
+La figura~\ref{fig:conexiones} muestra las mismas conexiones junto con las
+del encoder y la salida hacia el motor. El encoder se conecta al dsPIC, no al
+DAC: sus canales A y B entran al QEI por RB8 y RB9, y la posición viaja a la
+PC en la respuesta de cada trama. La salida \code{VOUTA} del DAC8554 entrega
+$\pm2.5$\,V con muy poca corriente, por lo que el motor de 14\,V requiere una
+etapa de potencia entre ambos, aún pendiente. Los colores de los cables del
+encoder corresponden a la asignación usual de los encoders de cinco hilos de
+Pittman y deben confirmarse con un multímetro antes de conectarlos: con
+alimentación, A y B alternan 500 veces por vuelta del eje y el índice una sola
+vez. El dsPIC opera a 3.3\,V, de modo que si el encoder entrega 5\,V hay que
+verificar que RB8 y RB9 los toleren o agregar un divisor; el firmware no
+habilita resistencias de \emph{pull-up} en esas terminales.
+
+\begin{figure}[H]
+\centering
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[x=1cm, y=1cm,
+    pin/.style  = {font=\scriptsize\ttfamily, inner sep=1.5pt},
+    blk/.style  = {draw=black!75, semithick, rounded corners=1.5pt},
+    ttl/.style  = {font=\footnotesize\bfseries, anchor=north, align=center},
+    cab/.style  = {font=\scriptsize, above, inner sep=1.5pt},
+    pend/.style = {draw=black!60, dashed, semithick, rounded corners=1.5pt,
+                   align=center, font=\footnotesize, minimum height=1cm}]
+  % ---- FT2232H ----
+  \draw[blk, fill=black!7] (0,0.9) rectangle (2.7,-4.1);
+  \node[ttl] at (1.35,0.85) {FT2232H\\[-1pt]\scriptsize canal A, MPSSE};
+  \foreach \y/\t in {-0.6/AD0 SCK, -1.3/AD1 MOSI, -2.0/AD2 MISO,
+                     -2.7/AD3 CS, -3.6/GND}
+    \node[pin, anchor=east] at (2.7,\y) {\t};
+  % ---- Curiosity Nano ----
+  \draw[blk, fill=black!7] (5.6,0.9) rectangle (9.0,-4.1);
+  \node[ttl] at (7.3,0.85) {dsPIC33CK64MC105\\[-1pt]\scriptsize Curiosity Nano};
+  \foreach \y/\t in {-0.6/RB13 SCK1, -1.3/RB14 SDI1, -2.0/RB11 SDO1,
+                     -2.7/RB10 SS1, -3.6/GND}
+    \node[pin, anchor=west] at (5.6,\y) {\t};
+  \foreach \y/\t in {-0.6/SCK2 RB0, -1.3/SDO2 RB2, -2.0/SYNC RB4, -3.6/GND}
+    \node[pin, anchor=east] at (9.0,\y) {\t};
+  \foreach \x/\t in {5.95/+5\,V, 6.75/GND, 7.55/RB8, 8.35/RB9}
+    \node[pin, anchor=south] at (\x,-4.1) {\t};
+  % ---- DAC8554 ----
+  \draw[blk, fill=black!7] (12.0,0.9) rectangle (14.6,-4.1);
+  \node[ttl] at (13.3,0.85) {DAC8554\\[-1pt]\scriptsize sobre PA0017C};
+  \foreach \y/\t in {-0.6/10 SCLK, -1.3/11 DIN, -2.0/9 SYNC, -3.6/6 GND}
+    \node[pin, anchor=west] at (12.0,\y) {\t};
+  \node[pin, anchor=north] at (13.3,-4.1) {1 VOUTA};
+  % ---- SPI1: FT2232H <-> dsPIC ----
+  \draw[sig] (2.7,-0.6) -- node[cab] {SCK} (5.6,-0.6);
+  \draw[sig] (2.7,-1.3) -- node[cab] {MOSI} (5.6,-1.3);
+  \draw[sig] (5.6,-2.0) -- node[cab] {MISO} (2.7,-2.0);
+  \draw[sig] (2.7,-2.7) -- node[cab] {\code{CS}} (5.6,-2.7);
+  \draw[semithick] (2.7,-3.6) -- node[cab] {cable de GND} (5.6,-3.6);
+  % ---- SPI2: dsPIC -> DAC ----
+  \draw[sig] (9.0,-0.6) -- node[cab] {SCLK} (12.0,-0.6);
+  \draw[sig] (9.0,-1.3) -- node[cab] {DIN} (12.0,-1.3);
+  \draw[sig] (9.0,-2.0) -- node[cab] {SYNC} (12.0,-2.0);
+  \draw[semithick] (9.0,-3.6) -- node[cab] {GND} (12.0,-3.6);
+  % ---- USB ----
+  \draw[semithick, double] (1.35,0.9) -- ++(0,0.7) node[above, font=\scriptsize] {USB a la PC};
+  \draw[semithick, double] (7.3,0.9) -- ++(0,0.7) node[above, font=\scriptsize] {USB a la PC (programación)};
+  % ---- Encoder ----
+  \draw[blk] (5.3,-6.2) rectangle (9.3,-7.5);
+  \node[font=\footnotesize, align=center] at (7.3,-6.85)
+    {\textbf{Encoder} (500 ciclos/rev)\\[-1pt]\scriptsize café: índice, sin conectar};
+  \foreach \x/\t in {5.95/rojo, 6.75/negro}
+    \draw[semithick] (\x,-6.2) -- node[sloped, above, font=\scriptsize] {\t} (\x,-4.1);
+  \foreach \x/\t in {7.55/blanco (A), 8.35/verde (B)}
+    \draw[sig] (\x,-6.2) -- node[sloped, above, font=\scriptsize] {\t} (\x,-4.1);
+  % ---- Salida al motor ----
+  \node[pend, minimum width=2.6cm] (pot) at (13.3,-5.6) {Etapa de potencia\\[-1pt]\scriptsize pendiente};
+  \node[pend, minimum width=2.6cm, solid] (mot) at (13.3,-6.9) {Motor Pittman\\[-1pt]\scriptsize GM8724S017-R1, 14\,V};
+  \draw[sig] (13.3,-4.45) -- node[right, font=\scriptsize] {$\pm2.5$\,V} (pot.north);
+  \draw[sig, dashed] (pot.south) -- (mot.north);
+  \draw[semithick, dashed] (mot.west) -- node[cab] {eje} (9.3,-6.9);
+\end{tikzpicture}}
+\caption{Diagrama de conexiones. Las flechas indican el sentido de cada
+señal. Los colores del encoder deben confirmarse (ver el texto); si A y B
+quedan invertidos sólo cambia el signo del conteo.}
+\label{fig:conexiones}
+\end{figure}
+
 \subsection{Protocolo de comunicación}
 
 Cada paso de simulación ejecuta una transferencia de ocho bytes en ambas

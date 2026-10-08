@@ -16,7 +16,9 @@ con sus S-Functions), sin cambiar sus modelos ni renombrar nada:
       * "Abrir <modelo>.bat", que abre MATLAB con esa carpeta como carpeta
         actual y el modelo abierto;
   - pone otro "Abrir <modelo>.bat" en la raíz del paquete, el firmware en
-    FIRMWARE/ y un LEEME.txt.
+    FIRMWARE/, su proyecto de MPLAB X en MPLAB/dsPicDaq.X (con
+    protocolo/daq_protocolo.h, que incluye como ../../protocolo) y un
+    LEEME.txt.
 
 Uso: empaquetar.py ORIGEN DESTINO [--mex CARPETA_CON_MEXW64]
 """
@@ -24,6 +26,7 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 import zipfile
 
@@ -44,6 +47,9 @@ LOCALES = {
     'daqPicEscribir.cpp': os.path.join(DAQPIC, 'daqPicEscribir.cpp'),
     'daqPicLeer.cpp': os.path.join(DAQPIC, 'daqPicLeer.cpp'),
 }
+
+# Proyecto del firmware: sólo los archivos versionados (sin build/ ni dist/)
+PROYECTO_FIRMWARE = ['MPLAB/dsPicDaq.X', 'protocolo/daq_protocolo.h']
 
 FIRMWARE = {
     'dsPicDaq.hex': os.path.join(RAIZ, 'MPLAB', 'dsPicDaq.hex'),
@@ -139,7 +145,18 @@ Requisitos
 2. Driver de FTDI instalado (carpeta DRIVER FTDI).
 3. Cable de GND entre la Curiosity Nano y la tarjeta del FT2232H.
 4. El modelo debe usar un solver de paso fijo (los incluidos usan 0.001 s).
-{mex}'''
+{mex}
+Código del firmware
+-------------------
+MPLAB/dsPicDaq.X es el proyecto de MPLAB X de FIRMWARE/dsPicDaq.hex
+(dsPIC33CK64MC105, XC16 o XC-DSC, pack dsPIC33CK-MC_DFP). Incluye
+../../protocolo/daq_protocolo.h, así que debe quedar junto a la carpeta
+protocolo/ de este paquete. En MPLAB X: File > Open Project > dsPicDaq.X y
+"Make and Program Device" con la Curiosity Nano conectada.
+
+No regenerar con MCC (botón Generate): config_bits.c está modificado a mano
+para cambiar al PLL y reinicio.c sustituye el manejo de trampas de MCC.
+'''
 
 
 def expandir(ruta, vistos):
@@ -239,6 +256,13 @@ def main():
     os.makedirs(os.path.join(a.destino, 'FIRMWARE'), exist_ok=True)
     for nombre, ruta in FIRMWARE.items():
         shutil.copy2(ruta, os.path.join(a.destino, 'FIRMWARE', nombre))
+
+    archivos = subprocess.run(['git', '-C', RAIZ, 'ls-files', '-z', '--', *PROYECTO_FIRMWARE],
+                              check=True, capture_output=True).stdout.decode().split('\0')
+    for rel in filter(None, archivos):
+        destino = os.path.join(a.destino, *rel.split('/'))
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        shutil.copy2(os.path.join(RAIZ, rel), destino)
 
     lista = ''.join(f'    SIMULINK/{m}/{m}.slx   {", ".join(u)}\n' for m, u in modelos)
     mex = ('5. Los .mexw64 vienen compilados para Windows de 64 bits. Si no cargan\n'

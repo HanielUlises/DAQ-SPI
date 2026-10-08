@@ -12,6 +12,7 @@
 \usepackage{float}
 \usepackage{enumitem}
 \usepackage{tikz}
+\usepackage{circuitikz}
 \usetikzlibrary{arrows.meta, positioning, calc, babel}
 \usepackage[hidelinks]{hyperref}
 
@@ -295,6 +296,67 @@ habilita resistencias de \emph{pull-up} en esas terminales.
 señal. Los colores del encoder deben confirmarse (ver el texto); si A y B
 quedan invertidos sólo cambia el signo del conteo.}
 \label{fig:conexiones}
+\end{figure}
+
+La figura~\ref{fig:encoder} detalla sólo el cable del encoder, con los hilos
+en el orden en que salen del conector.
+
+\begin{figure}[H]
+\centering
+\definecolor{cafe}{RGB}{120,72,35}
+\definecolor{verdecable}{RGB}{20,130,60}
+\begin{tikzpicture}[x=1cm, y=1cm,
+    hilo/.style = {line width=1.6pt},
+    pin/.style  = {font=\scriptsize\ttfamily, inner sep=1.5pt},
+    fn/.style   = {font=\scriptsize, anchor=south west, inner sep=2pt}]
+  % ---- Encoder en la parte trasera del motor ----
+  \draw[draw=black!75, semithick, fill=black!7] (0,-2.4) circle (1.7);
+  \draw[black!50] (0,-2.4) circle (1.0);
+  \foreach \a in {0,30,...,330}
+    \draw[black!50] ($(0,-2.4)+(\a:1.0)$) -- ($(0,-2.4)+(\a:1.25)$);
+  \node[font=\footnotesize\bfseries, align=center] at (0,-2.4) {Encoder};
+  \node[font=\scriptsize, align=center] at (0,-4.55) {500 ciclos/rev\\(motor Pittman)};
+  \draw[draw=black!75, semithick, fill=black!20] (1.6,0) rectangle (2.1,-4.8);
+  \node[font=\scriptsize, rotate=90] at (1.35,-0.6) {conector};
+  % ---- Curiosity Nano ----
+  \draw[draw=black!75, semithick, rounded corners=1.5pt, fill=black!7]
+    (11.2,0.4) rectangle (14.4,-5.2);
+  \node[font=\footnotesize\bfseries, align=center, anchor=north] at (12.8,0.35)
+    {Curiosity Nano\\[-1pt]\scriptsize\mdseries dsPIC33CK64MC105};
+  \foreach \y/\p/\f in {-1.4/VBUS/+5\,V, -2.4/RB8/QEI A, -3.4/RB9/QEI B, -4.4/GND/GND} {
+    \fill (11.2,\y) circle (1.6pt);
+    \node[pin, anchor=west] at (11.25,\y) {\p};
+    \node[font=\scriptsize, anchor=east] at (14.35,\y) {\f};
+  }
+  % ---- Hilos, en el orden del conector ----
+  \draw[hilo, cafe] (2.1,-0.4) -- (4.6,-0.4);
+  \draw[semithick] (4.5,-0.3) -- (4.7,-0.5) (4.5,-0.5) -- (4.7,-0.3);
+  \node[font=\scriptsize, anchor=west] at (4.8,-0.4) {sin conectar};
+  \draw[hilo, red!80!black] (2.1,-1.4) -- (11.2,-1.4);
+  \draw[line width=2.4pt, black!70] (2.1,-2.4) -- (11.2,-2.4);
+  \draw[line width=1.2pt, white]    (2.1,-2.4) -- (11.2,-2.4);
+  \draw[hilo, verdecable] (2.1,-3.4) -- (11.2,-3.4);
+  \draw[hilo, black] (2.1,-4.4) -- (11.2,-4.4);
+  \foreach \y/\c/\f in {-0.4/café/índice, -1.4/rojo/alimentación, -2.4/blanco/canal A,
+                       -3.4/verde/canal B, -4.4/negro/tierra}
+    \node[fn] at (2.25,\y) {\textbf{\c}: \f};
+  % ---- Divisores opcionales ----
+  \foreach \y in {-2.4,-3.4}
+    \draw[black!60, dashed, rounded corners=1pt, fill=white] (7.2,\y+0.3) rectangle node[font=\scriptsize] {divisor$^{*}$} (9.0,\y-0.3);
+  % ---- Detalle del divisor ----
+  \node[font=\scriptsize, anchor=west] at (2.4,-6.0)
+    {$^{*}$Sólo si RB8 y RB9 no toleran 5\,V; uno en cada canal:};
+  \draw (3.6,-6.9) node[left, font=\scriptsize] {canal A (B)}
+        to[R, l=\scriptsize$1\,\mathrm{k}\Omega$] (6.4,-6.9)
+        to[short, -o] (8.6,-6.9) node[right, font=\scriptsize] {RB8 (RB9), $\approx 3.3$\,V};
+  \draw (6.4,-6.9) to[R, l_=\scriptsize$2\,\mathrm{k}\Omega$, *-] (6.4,-8.6) node[ground] {};
+\end{tikzpicture}
+\caption{Conexión del encoder a la Curiosity Nano. Los colores corresponden a
+la asignación usual de Pittman y deben confirmarse con un multímetro: con
+rojo a 5\,V y negro a tierra, A y B alternan 500 veces por vuelta del eje y el
+índice una sola vez. Si A y B quedan invertidos sólo cambia el signo del
+conteo.}
+\label{fig:encoder}
 \end{figure}
 
 \subsection{Protocolo de comunicación}

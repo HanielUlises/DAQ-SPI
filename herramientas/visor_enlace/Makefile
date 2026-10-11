@@ -24,7 +24,8 @@ TERCEROS = $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp $(IMGUI)/imgui_tables.cpp 
 OBJ_TERCEROS = $(patsubst %.cpp,obj/%.o,$(notdir $(TERCEROS)))
 
 ENCABEZADOS = adquisicion.h bits.h control.h diagrama.h exportar.h simulador.h \
-              ../comun/enlace_prueba.h ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h
+              ../comun/enlace_prueba.h ../comun/mpsse_linux.h ../../protocolo/daq_protocolo.h \
+              ../../protocolo/daq_canal.h
 
 vpath %.cpp $(IMGUI) $(IMGUI)/backends $(IMPLOT)
 

@@ -249,35 +249,41 @@ static inline void registrar(FILE *f, const Trama *t)
     fputc('\n', f);
 }
 
-/* Abre la interfaz A (daq_canal.h) como maestro SPI en modo 0 con SCK = reloj. Con lazo (sólo
- * en Linux) une MOSI con MISO dentro del FT2232H. Si falla, deja el motivo en
- * error y devuelve false. */
-static inline bool enlace_abrir(DWORD reloj, bool lazo, FT_HANDLE *h, char *error, size_t n)
+/* Abre como maestro SPI en modo 0 con SCK = reloj la interfaz del FT2232H por
+ * la que responde el dsPIC (daq_canal.h). Si no responde por ninguna, abre la
+ * interfaz A de todos modos, para que la prueba registre lo que llega, y deja
+ * en canal->detalle lo que se obtuvo en cada una. Con lazo (sólo en Linux)
+ * no se busca: se abre la A y se une MOSI con MISO dentro del FT2232H. Si
+ * falla, deja el motivo en error y devuelve false. */
+static inline bool enlace_abrir(DWORD reloj, bool lazo, FT_HANDLE *h, char *error, size_t n,
+                                DaqCanal *canal = NULL)
 {
+    DaqCanal local;
+    if (canal == NULL) canal = &local;
     Init_libMPSSE();
 
     DWORD canales = 0;
     *h = NULL;
+    memset(canal, 0, sizeof *canal);
     if (SPI_GetNumChannels(&canales) != FT_OK || canales == 0) {
         snprintf(error, n, "No se detectó ningún FT2232H.");
         Cleanup_libMPSSE();
         return false;
     }
-    if (SPI_OpenChannel(daq_canal_a(canales), h) != FT_OK) {
-        snprintf(error, n, "No se pudo abrir la interfaz A (¿está en uso?).");
-        Cleanup_libMPSSE();
-        return false;
+    if (!lazo && daq_abrir_canal(canales, reloj, h, canal)) {
+        return true;
     }
 
-    ChannelConfig conf;
-    memset(&conf, 0, sizeof conf);
-    conf.ClockRate = reloj;
-    conf.LatencyTimer = 1;
-    conf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 |
-                         SPI_CONFIG_OPTION_CS_ACTIVELOW;
-    if (SPI_InitChannel(*h, &conf) != FT_OK) {
-        snprintf(error, n, "Falló la inicialización del canal SPI.");
-        SPI_CloseChannel(*h);
+    canal->canal = daq_canal_a(canales);
+    canal->interfaz = daq_canal_interfaz(canal->canal);
+    const int r = daq_canal_iniciar(canal->canal, reloj, h);
+    if (r != 0) {
+        if (r == 1) {
+            snprintf(error, n, "No se pudo abrir la interfaz %c (¿está en uso?).", canal->interfaz);
+        } else {
+            snprintf(error, n, "Falló la inicialización del canal SPI.");
+        }
+        *h = NULL;
         Cleanup_libMPSSE();
         return false;
     }

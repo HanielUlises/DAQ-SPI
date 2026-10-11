@@ -194,22 +194,22 @@ static void mdlStart(SimStruct *S)
         ssSetErrorStatus(S, DAQ_NOMBRE ": no se detecto ningun FT2232H.");
         return;
     }
-    if (SPI_OpenChannel(daq_canal_a(canales), &e->handle) != FT_OK) {
-        ssSetErrorStatus(S, DAQ_NOMBRE ": no se pudo abrir la interfaz A del FT2232H "
-                            "(lo usa otro programa o modelo?).");
+    /* Se usa la interfaz del FT2232H por la que responde el dsPIC: primero la
+     * A, que es la cableada, y después las demás (daq_canal.h) */
+    DaqCanal canal;
+    if (!daq_abrir_canal(canales, DAQ_CANAL_RELOJ_HZ, &e->handle, &canal)) {
+        static char mensaje[400];
+        snprintf(mensaje, sizeof mensaje,
+                 DAQ_NOMBRE ": el dsPIC no respondio por ninguna interfaz del FT2232H (%s). "
+                 "Verifique que tenga cargado el firmware dsPicDaq, las conexiones SPI "
+                 "y el cable de GND entre las tarjetas.", canal.detalle);
+        ssSetErrorStatus(S, mensaje);
         return;
     }
     e->abierto = true;
-
-    ChannelConfig conf;
-    memset(&conf, 0, sizeof conf);
-    conf.ClockRate = 1000000;
-    conf.LatencyTimer = 1;
-    conf.configOptions = SPI_CONFIG_OPTION_MODE0 | SPI_CONFIG_OPTION_CS_DBUS3 |
-                         SPI_CONFIG_OPTION_CS_ACTIVELOW;
-    if (SPI_InitChannel(e->handle, &conf) != FT_OK) {
-        ssSetErrorStatus(S, DAQ_NOMBRE ": fallo la inicializacion del canal SPI.");
-        return;
+    if (canal.interfaz != 'A') {
+        ssPrintf(DAQ_NOMBRE ": el dsPIC respondio por la interfaz %c del FT2232H.\n",
+                 canal.interfaz);
     }
 
     /* Primera trama: pone en cero el encoder con la salida deshabilitada. Su

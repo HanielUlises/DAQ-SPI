@@ -127,9 +127,15 @@ int main(int argc, char **argv)
 
     FT_HANDLE h = NULL;
     char error[128];
-    if (!enlace_abrir(reloj, lazo, &h, error, sizeof error)) {
+    DaqCanal canal;
+    if (!enlace_abrir(reloj, lazo, &h, error, sizeof error, &canal)) {
         fprintf(stderr, "%s\n", error);
         return 2;
+    }
+    printf("Interfaz %c del FT2232H (canal %lu)\n", canal.interfaz, (unsigned long)canal.canal);
+    if (!lazo && !canal.responde) {
+        printf("Aviso: el dsPIC no respondió por ninguna interfaz (%s); se prueba la %c.\n",
+               canal.detalle, canal.interfaz);
     }
 
     char texto_salida[48];

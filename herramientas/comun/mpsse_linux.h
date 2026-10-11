@@ -1,16 +1,17 @@
 /*
  * Subconjunto de la API de libMPSSE-SPI implementado sobre libftdi1, para
  * compilar prueba_enlace en Linux. Reproduce sólo lo que usa el programa:
- * canal A del FT2232H como maestro SPI en modo 0, CS activo en bajo en
- * ADBUS3 y transferencias full-duplex enmarcadas por CS.
+ * las interfaces A y B del FT2232H como maestro SPI en modo 0, CS activo en
+ * bajo en xDBUS3 y transferencias full-duplex enmarcadas por CS.
  *
  * El FT2232H de la tarjeta tiene la EEPROM reprogramada con VID 0x2099 y
  * PID 0x0001 ("Custom DAC USB Bridge", el mismo identificador que reconoce
  * el driver modificado de DRIVER FTDI/). Se buscan ese identificador y el de
  * fábrica. 70-daq-spi.rules da acceso al dispositivo sin sudo.
  *
- * libftdi1 desliga el módulo ftdi_sio del canal A al abrirlo, por lo que no
- * hace falta descargarlo.
+ * Como en libMPSSE, cada FT2232H aporta dos canales: 2d es la interfaz A del
+ * dispositivo d y 2d + 1 la B. libftdi1 desliga el módulo ftdi_sio de la
+ * interfaz al abrirla, por lo que no hace falta descargarlo.
  */
 #ifndef MPSSE_LINUX_H
 #define MPSSE_LINUX_H
@@ -64,7 +65,7 @@ enum {
     MPSSE_CMD_INVALIDO = 0xAA
 };
 
-/* ADBUS0 SCK, ADBUS1 MOSI y ADBUS3 CS son salidas; ADBUS2 MISO es entrada */
+/* xDBUS0 SCK, xDBUS1 MOSI y xDBUS3 CS son salidas; xDBUS2 MISO es entrada */
 static const uint8_t kMpsseDireccion = 0x0B;
 static const uint8_t kMpsseCsAlto = 0x08;
 static const uint8_t kMpsseCsBajo = 0x00;
@@ -119,7 +120,7 @@ static FT_STATUS SPI_GetNumChannels(DWORD *canales)
         if (n < 0) {
             return FT_OTHER_ERROR;
         }
-        *canales += (DWORD)n;
+        *canales += 2u * (DWORD)n;
     }
     return FT_OK;
 }
@@ -134,20 +135,25 @@ typedef struct {
     FT_HANDLE ftHandle;
 } FT_DEVICE_LIST_INFO_NODE;
 
-/* Aquí cada canal es la interfaz A de un dispositivo, así que el número de
- * serie termina en 'A' como lo reporta D2XX en Windows */
+/* El número de serie termina en la letra de la interfaz, como lo reporta
+ * D2XX en Windows */
 static FT_STATUS SPI_GetChannelInfo(DWORD indice, FT_DEVICE_LIST_INFO_NODE *info)
 {
+    const char interfaz = (char)('A' + indice % 2u);
     memset(info, 0, sizeof *info);
-    snprintf(info->SerialNumber, sizeof info->SerialNumber, "%uA", (unsigned)indice);
-    snprintf(info->Description, sizeof info->Description, "Canal A");
+    snprintf(info->SerialNumber, sizeof info->SerialNumber, "%u%c", (unsigned)(indice / 2u),
+             interfaz);
+    snprintf(info->Description, sizeof info->Description, "Canal %c", interfaz);
     return FT_OK;
 }
 
-/* Abre el canal A del dispositivo número indice, contando todos los
- * identificadores aceptados en el orden de kMpsseIds */
+/* Abre la interfaz del canal indice (A si es par, B si es impar) del
+ * dispositivo indice / 2, contando todos los identificadores aceptados en el
+ * orden de kMpsseIds */
 static FT_STATUS SPI_OpenChannel(DWORD indice, FT_HANDLE *h)
 {
+    const enum ftdi_interface interfaz = indice % 2u ? INTERFACE_B : INTERFACE_A;
+    indice /= 2u;
     for (int i = 0; i < kMpsseNumIds; i++) {
         struct ftdi_context *ctx = ftdi_new();
         struct ftdi_device_list *lista = NULL;
@@ -160,7 +166,7 @@ static FT_STATUS SPI_OpenChannel(DWORD indice, FT_HANDLE *h)
             for (DWORD k = 0; k < indice; k++) {
                 d = d->next;
             }
-            ftdi_set_interface(ctx, INTERFACE_A);
+            ftdi_set_interface(ctx, interfaz);
             ctx->module_detach_mode = AUTO_DETACH_REATACH_SIO_MODULE;
             int r = ftdi_usb_open_dev(ctx, d->dev);
             ftdi_list_free(&lista);

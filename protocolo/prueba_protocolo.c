@@ -5,7 +5,8 @@
  *   ./prueba_protocolo
  *
  * Incluye un modelo del esclavo que reproduce la lógica de enlace.c: la
- * respuesta de la transferencia k se construye al terminar la k-1.
+ * respuesta de la transferencia k se construye al terminar la k-1, y una
+ * imitación de libMPSSE para probar la elección del canal (daq_canal.h).
  */
 #include <stdio.h>
 #include <string.h>
@@ -95,6 +96,100 @@ static void esclavo_arrancar(struct esclavo *e, uint8_t causa)
     e->en_falla = 1;
     esclavo_construir_respuesta(e);
     e->status_pendiente = (uint8_t)(causa << DAQ_STATUS_REINICIO_POS);
+}
+
+/* ---- Imitación de libMPSSE para daq_canal.h ----------------------------- */
+
+typedef uint32_t DWORD;
+typedef uint32_t FT_STATUS;
+typedef struct canal_falso *FT_HANDLE;
+
+#define FT_OK                                   0u
+#define FT_DEVICE_NOT_OPENED                    3u
+#define SPI_CONFIG_OPTION_MODE0                 0x00000000u
+#define SPI_CONFIG_OPTION_CS_DBUS3              0x00000000u
+#define SPI_CONFIG_OPTION_CS_ACTIVELOW          0x00000020u
+#define SPI_TRANSFER_OPTIONS_SIZE_IN_BYTES      0x00000000u
+#define SPI_TRANSFER_OPTIONS_CHIPSELECT_ENABLE  0x00000002u
+#define SPI_TRANSFER_OPTIONS_CHIPSELECT_DISABLE 0x00000004u
+
+typedef struct {
+    DWORD ClockRate;
+    uint8_t LatencyTimer;
+    DWORD configOptions;
+} ChannelConfig;
+
+typedef struct {
+    char SerialNumber[16];
+} FT_DEVICE_LIST_INFO_NODE;
+
+/* Un canal del FT2232H y lo que tiene conectado */
+struct canal_falso {
+    char serie[16];
+    int en_uso;             /* SPI_OpenChannel falla */
+    struct esclavo *pic;    /* NULL: sin dsPIC, MISO queda en relleno */
+    uint8_t relleno;
+    int abierto;
+    unsigned tramas;
+};
+
+#define CANALES_FALSOS 2u
+static struct canal_falso canales_falsos[CANALES_FALSOS];
+
+static FT_STATUS SPI_GetChannelInfo(DWORD i, FT_DEVICE_LIST_INFO_NODE *info)
+{
+    memcpy(info->SerialNumber, canales_falsos[i].serie, sizeof info->SerialNumber);
+    return FT_OK;
+}
+
+static FT_STATUS SPI_OpenChannel(DWORD i, FT_HANDLE *h)
+{
+    if (canales_falsos[i].en_uso) {
+        return FT_DEVICE_NOT_OPENED;
+    }
+    canales_falsos[i].abierto = 1;
+    *h = &canales_falsos[i];
+    return FT_OK;
+}
+
+static FT_STATUS SPI_InitChannel(FT_HANDLE h, ChannelConfig *conf)
+{
+    (void)h;
+    (void)conf;
+    return FT_OK;
+}
+
+static FT_STATUS SPI_ReadWrite(FT_HANDLE h, uint8_t *rx, uint8_t *tx, DWORD n, DWORD *t,
+                               DWORD opciones)
+{
+    (void)opciones;
+    if (h->pic != NULL) {
+        esclavo_transferir(h->pic, tx, rx, n);
+    } else {
+        memset(rx, h->relleno, n);
+    }
+    h->tramas++;
+    *t = n;
+    return FT_OK;
+}
+
+static FT_STATUS SPI_CloseChannel(FT_HANDLE h)
+{
+    h->abierto = 0;
+    return FT_OK;
+}
+
+#include "daq_canal.h"
+
+/* Los dos canales como los numeró D2XX en la PC del laboratorio: el 0 es la
+ * interfaz B y el 1 la A */
+static void canales_reiniciar(void)
+{
+    memset(canales_falsos, 0, sizeof canales_falsos);
+    strcpy(canales_falsos[0].serie, "FT88FI80B");
+    strcpy(canales_falsos[1].serie, "FT88FI80A");
+    canales_falsos[0].relleno = 0xFFu;
+    canales_falsos[1].relleno = 0xFFu;
 }
 
 /* ---- Pruebas ------------------------------------------------------------- */
@@ -396,6 +491,59 @@ static void prueba_reinicio(void)
     VERIFICA(seq == 9u);
 }
 
+static void prueba_canal(void)
+{
+    struct esclavo e;
+    FT_HANDLE h;
+    DaqCanal c;
+
+    /* La interfaz A se prueba primero aunque sea el canal 1, y no se toca la B */
+    canales_reiniciar();
+    esclavo_arrancar(&e, DAQ_REINICIO_ENCENDIDO);
+    e.posicion = 1234;
+    canales_falsos[1].pic = &e;
+    VERIFICA(daq_canal_a(CANALES_FALSOS) == 1u);
+    VERIFICA(daq_abrir_canal(CANALES_FALSOS, DAQ_CANAL_RELOJ_HZ, &h, &c));
+    VERIFICA(c.responde && c.canal == 1u && c.interfaz == 'A');
+    VERIFICA(h == &canales_falsos[1] && canales_falsos[1].abierto);
+    VERIFICA(canales_falsos[0].tramas == 0u && !canales_falsos[0].abierto);
+    /* Las tramas de prueba no habilitan la salida ni tocan el encoder */
+    VERIFICA(canales_falsos[1].tramas >= 2u);
+    VERIFICA(e.dac == DAQ_DAC_CERO && e.posicion == 1234);
+
+    /* dsPIC cableado a la interfaz B */
+    canales_reiniciar();
+    esclavo_arrancar(&e, DAQ_REINICIO_ENCENDIDO);
+    canales_falsos[0].pic = &e;
+    VERIFICA(daq_abrir_canal(CANALES_FALSOS, DAQ_CANAL_RELOJ_HZ, &h, &c));
+    VERIFICA(c.responde && c.canal == 0u && c.interfaz == 'B');
+    VERIFICA(h == &canales_falsos[0]);
+    VERIFICA(canales_falsos[1].tramas == DAQ_CANAL_TRAMAS && !canales_falsos[1].abierto);
+
+    /* Sin dsPIC: todo queda cerrado y el detalle dice qué se leyó */
+    canales_reiniciar();
+    VERIFICA(!daq_abrir_canal(CANALES_FALSOS, DAQ_CANAL_RELOJ_HZ, &h, &c));
+    VERIFICA(!c.responde && h == NULL);
+    VERIFICA(!canales_falsos[0].abierto && !canales_falsos[1].abierto);
+    VERIFICA(strcmp(c.detalle, "interfaz A: solo 0xFF; interfaz B: solo 0xFF") == 0);
+
+    /* La A la usa otro programa y en la B el MISO está en bajo */
+    canales_reiniciar();
+    canales_falsos[1].en_uso = 1;
+    canales_falsos[0].relleno = 0x00u;
+    VERIFICA(!daq_abrir_canal(CANALES_FALSOS, DAQ_CANAL_RELOJ_HZ, &h, &c));
+    VERIFICA(strcmp(c.detalle,
+                    "interfaz A: no se pudo abrir (en uso?); interfaz B: solo 0x00") == 0);
+
+    /* Un número de serie sin letra de interfaz (FT232H): se usa el canal 0 */
+    canales_reiniciar();
+    strcpy(canales_falsos[0].serie, "FT1234XYZ9");
+    strcpy(canales_falsos[1].serie, "FT1234XYZ8");
+    VERIFICA(daq_canal_interfaz(0u) == '?' && daq_canal_a(CANALES_FALSOS) == 0u);
+    VERIFICA(!daq_abrir_canal(CANALES_FALSOS, DAQ_CANAL_RELOJ_HZ, &h, &c));
+    VERIFICA(strcmp(c.detalle, "canal 0: solo 0xFF; canal 1: solo 0xFF") == 0);
+}
+
 int main(void)
 {
     prueba_crc();
@@ -407,6 +555,7 @@ int main(void)
     prueba_seq_vuelta();
     prueba_vigilancia();
     prueba_reinicio();
+    prueba_canal();
 
     if (fallas == 0) {
         printf("OK: todas las pruebas pasaron\n");

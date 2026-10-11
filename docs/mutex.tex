@@ -1,0 +1,695 @@
+\documentclass[11pt]{article}
+\usepackage[spanish,es-tabla,es-nodecimaldot,es-noshorthands]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, fit, decorations.pathreplacing, babel}
+\usepackage[hidelinks]{hyperref}
+
+\setlist{itemsep=2pt, topsep=4pt}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\lstset{
+  language=C++, basicstyle=\footnotesize\ttfamily, columns=fullflexible,
+  keepspaces=true, frame=lines, framesep=4pt, xleftmargin=4pt,
+  xrightmargin=4pt, commentstyle=\color{black!55}\itshape,
+  keywordstyle=\bfseries, showstringspaces=false, aboveskip=8pt,
+  belowskip=6pt, captionpos=b,
+}
+\renewcommand{\lstlistingname}{Listado}
+
+\tikzset{
+  box/.style   = {draw=black!75, semithick, rounded corners=1.5pt, align=center,
+                  minimum height=1.1cm, minimum width=2.6cm, font=\footnotesize,
+                  fill=white},
+  shade/.style = {box, fill=black!7},
+  sig/.style   = {-{Stealth[length=2mm]}, semithick},
+  lab/.style   = {font=\scriptsize, midway, above},
+  note/.style  = {font=\scriptsize\itshape, align=center},
+  panel/.style = {draw=black!40, rounded corners=3pt, inner sep=8pt},
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\us}{\,$\mu$s}
+
+\title{El mutex de los bloques de Simulink\\[2pt]
+       \large Por qué no causaba el bloqueo del enlace USB--SPI\\
+       y qué se cambió para eliminarlo}
+\author{Haniel Ulises\\Servicio social}
+\date{11 de octubre de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Se responde la pregunta de si el mutex de los bloques de Simulink
+\code{escribirPic} y \code{leerPic} es compatible con Windows y si es la causa
+del bloqueo de la comunicación con el dsPIC33CK64MC105. El mutex es un objeto
+del núcleo de Windows (\code{CreateMutex}, \code{WaitForSingleObject},
+\code{ReleaseMutex}) y es compatible con ese sistema, pero no puede causar el
+bloqueo: Simulink ejecuta los bloques uno después del otro en un solo hilo, por
+lo que el mutex siempre está libre cuando un bloque lo pide. El bloqueo y las
+tramas corruptas tenían su origen en el firmware del dsPIC, que podía quedarse
+en una espera activa y dejaba de recibir al desbordarse la FIFO del SPI, y en
+el uso que la PC hacía del bus, con una escritura y una lectura separadas en
+cada paso. Se describen los cambios realizados para eliminar esas causas: un
+protocolo de una sola transferencia full-duplex de ocho bytes por paso,
+delimitada por \code{CS} y protegida con número de secuencia y CRC-8; un
+firmware nuevo que atiende el SPI con DMA; bloques de Simulink en los que un
+solo bloque usa el FT2232H, sin mutex; y herramientas para probar el enlace sin
+MATLAB. En Windows, el modelo \code{MergedPic.slx} del asesor, sin
+modificaciones y con los bloques nuevos, ejecutó 10\,001 pasos a 1\,kHz sin
+errores de comunicación.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ===========================================================================
+\section{La pregunta y la respuesta corta}
+
+La pregunta fue si el mutex que usan los bloques de Simulink es compatible con
+Windows y si el bloqueo de la comunicación con el dsPIC se debía a él.
+
+\begin{itemize}
+\item \textbf{¿Es compatible con Windows?} Sí. No es un mecanismo de Simulink
+  ni de C++, sino un objeto del núcleo de Windows creado y usado con las
+  funciones de \code{kernel32}. Compila con MSVC y funciona en cualquier
+  versión de Windows; de hecho, sólo existe en Windows.
+\item \textbf{¿Es la causa del bloqueo?} No. En una simulación de Simulink los
+  bloques se ejecutan en un solo hilo, de modo que nunca hay dos bloques
+  esperando el mutex al mismo tiempo. Además, un mutex de Windows no bloquea al
+  hilo que ya lo tiene, y si su dueño desaparece el siguiente que lo pide
+  continúa. La sección~\ref{sec:mutex} detalla los cuatro argumentos.
+\item \textbf{¿De dónde venía el bloqueo?} Del firmware del dsPIC y del uso del
+  bus SPI desde la PC (sección~\ref{sec:causas}). Esas causas ya estaban
+  identificadas en la propuesta (\code{docs/propuesta.pdf}) y en la sección
+  ``Limitaciones conocidas'' del \code{README.md}.
+\end{itemize}
+
+Los bloques nuevos no tienen mutex porque un solo bloque usa el FT2232H, pero
+eso es una consecuencia del rediseño, no la corrección del bloqueo.
+
+% ===========================================================================
+\section{Cómo funcionaban los bloques anteriores}
+\label{sec:anteriores}
+
+Los bloques anteriores eran tres S-Functions de nivel~2 que compartían el
+FT2232H. El código está en \code{SIMULINK/WritePicModificado} y
+\code{SIMULINK/ReadPicModificado}, y el modelo que los usa es
+\code{MergedPic.slx}. La tabla~\ref{tab:anteriores} resume lo que hacía cada
+uno.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lYl@{}}
+\toprule
+Bloque & Qué hacía & Operación SPI por paso \\
+\midrule
+\code{initializePic} & Abría el canal~0 de libMPSSE a 1\,MHz en modo~0, con
+  \code{CS} activo en bajo en \code{ADBUS3}, y creaba el mutex. Su salida era
+  la ``llave'': la dirección de la estructura compartida \code{HandleFTDI}
+  expresada como entero de 64 bits. & Ninguna \\
+\code{escribirPic} & Convertía el voltaje a un código de 16 bits,
+  $13107\,(V + 2.5)$. Si el código no había cambiado respecto al paso anterior,
+  no enviaba nada. & \code{SPI\_Write}, 3 bytes \\
+\code{leerPic} & Leía 12 bytes y buscaba la secuencia \code{0xAA 0x55}
+  seguida de 4 bytes de posición. & \code{SPI\_Read}, 12 bytes \\
+\bottomrule
+\end{tabularx}
+\caption{Bloques anteriores.}
+\label{tab:anteriores}
+\end{table}
+
+La estructura compartida está definida en \code{ftdi\_compartido.h}
+(listado~\ref{lst:estructura}). Contiene el \emph{handle} del FT2232H, una
+bandera que indica si el canal se abrió y el \emph{handle} del mutex. El
+\code{\#include <mutex>} de la biblioteca estándar de C++ no se usa: el mutex
+es el de Windows.
+
+\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[caption={Estructura compartida
+  (\code{SIMULINK/WritePicModificado/ftdi\_compartido.h}).},
+  label=lst:estructura]
+#include <mutex>        // no se usa
+#include <windows.h>
+#include "ftd2xx.h"
+#include "libmpsse_spi.h"
+
+struct HandleFTDI {
+    FT_HANDLE handle;
+    bool abierto;
+    HANDLE semaforo;    // mutex del nucleo de Windows
+};
+\end{lstlisting}
+\end{minipage}
+
+\code{initializePic} crea el mutex sin nombre en \code{mdlStart}
+(\code{initializePic.cpp}, línea~52) y lo destruye con \code{CloseHandle} en
+\code{mdlTerminate}, después de enviar \code{0xAA 0x00 0x00}. Con la
+conversión de \code{escribirPic}, el código \code{0x0000} equivale a
+$-2.5$\,V, no a 0\,V. \code{escribirPic} y \code{leerPic} toman el mutex antes
+de su operación sobre el bus y lo sueltan al terminar
+(listado~\ref{lst:uso}).
+
+\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[caption={Uso del mutex en \code{escribirPic.cpp}
+  (líneas 174--220) y \code{leerPic.cpp} (líneas 110--125), resumido.},
+  label=lst:uso]
+// escribirPic, mdlOutputs
+if (!primerEnvio[0] && valor_dac == ultimoValor[0])
+    return;                                   // valor repetido: no envia
+WaitForSingleObject(hw->semaforo, INFINITE);
+bufferTx[0] = 0xAA;
+bufferTx[1] = (valor_dac >> 8) & 0xFF;
+bufferTx[2] = valor_dac & 0xFF;
+SPI_Write(hw->handle, bufferTx, 3, &bytesTransferidos, ...);
+ReleaseMutex(hw->semaforo);
+
+// leerPic, mdlOutputs
+WaitForSingleObject(hw->semaforo, INFINITE);
+status = SPI_Read(hw->handle, Buf, 12, &bytesTransferidos, ...);
+ReleaseMutex(hw->semaforo);
+for (i = 0; i < bytesTransferidos - 5; i++)
+    if (Buf[i] == 0xAA && Buf[i+1] == 0x55) { /* posicion en Buf[i+2..i+5] */ }
+\end{lstlisting}
+\end{minipage}
+
+En cada paso de simulación había entonces dos transacciones independientes
+sobre el bus: una escritura de 3 bytes y una lectura de 12. La parte izquierda
+de la figura~\ref{fig:antes-ahora} lo muestra.
+
+% ===========================================================================
+\section{El mutex}
+\label{sec:mutex}
+
+\subsection{Es compatible con Windows}
+
+Las cuatro funciones que usan los bloques, \code{CreateMutex},
+\code{WaitForSingleObject}, \code{ReleaseMutex} y \code{CloseHandle}, son del
+API de Windows y están en \code{kernel32.dll}, que está presente en todas las
+versiones. El mutex se crea sin nombre, por lo que sólo se puede alcanzar a
+través del \emph{handle} guardado en \code{HandleFTDI}: ningún otro proceso
+puede tomarlo. No hay ninguna incompatibilidad entre este mutex y Windows,
+MATLAB o el compilador MSVC.
+
+\subsection{No puede causar el bloqueo}
+
+Un mutex sólo detiene a un hilo cuando otro hilo distinto lo tiene tomado y no
+lo suelta. En estos bloques esa situación no se presenta, por cuatro razones.
+
+\begin{enumerate}
+\item \textbf{Nunca hay dos bloques compitiendo por él.} En una simulación
+  normal, Simulink calcula las salidas de los bloques en un orden fijo y en un
+  solo hilo: llama a \code{mdlOutputs} de \code{escribirPic}, regresa, y
+  después llama a \code{mdlOutputs} de \code{leerPic}
+  (figura~\ref{fig:hilo}). Cuando un bloque pide el mutex, el otro ya lo soltó,
+  y \code{WaitForSingleObject} regresa de inmediato. El mutex nunca espera.
+\item \textbf{Un mutex de Windows no bloquea al hilo que ya lo tiene.} Es
+  recursivo para su dueño: el mismo hilo puede volver a tomarlo sin quedarse
+  esperando. Aunque faltara una llamada a \code{ReleaseMutex} en algún camino
+  del código, el hilo de la simulación no se detendría por ello.
+\item \textbf{Tampoco espera si su dueño desaparece.} Si el hilo que tiene el
+  mutex termina sin soltarlo, Windows lo marca como abandonado y el siguiente
+  \code{WaitForSingleObject} regresa con \code{WAIT\_ABANDONED} en lugar de
+  esperar para siempre.
+\item \textbf{No hay otro candado en la cadena.} Se revisaron las funciones que
+  importa \code{libmpsse.dll}: de \code{kernel32} sólo usa \code{Sleep},
+  \code{QueryPerformanceCounter}, \code{LoadLibraryW}, \code{GetProcAddress} y
+  funciones de diagnóstico, y carga \code{ftd2xx.dll} en tiempo de ejecución.
+  No importa ninguna primitiva de sincronización (mutex, sección crítica ni
+  evento). Las lecturas y escrituras del D2XX tienen tiempos límite
+  (\code{FT\_SetTimeouts}), por lo que tampoco esperan indefinidamente.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1cm, y=1cm,
+    seg/.style = {draw=black!75, semithick, minimum height=0.75cm,
+                  font=\scriptsize, inner sep=1pt, anchor=west},
+    mtx/.style = {seg, fill=black!7}]
+  \node[font=\footnotesize, anchor=east] at (-0.2,0) {Hilo de Simulink};
+  \draw[->, semithick, black!60] (0,-0.6) -- (15.4,-0.6)
+    node[right, font=\scriptsize] {$t$};
+  % escribirPic
+  \node[mtx, minimum width=1.0cm] (w1) at (0,0) {Wait};
+  \node[seg, minimum width=2.4cm] (w2) at (w1.east) {\code{SPI\_Write} 3\,B};
+  \node[mtx, minimum width=1.2cm] (w3) at (w2.east) {Release};
+  % leerPic
+  \node[mtx, minimum width=1.0cm] (r1) at ($(w3.east)+(0.3,0)$) {Wait};
+  \node[seg, minimum width=2.4cm] (r2) at (r1.east) {\code{SPI\_Read} 12\,B};
+  \node[mtx, minimum width=1.2cm] (r3) at (r2.east) {Release};
+  % paso siguiente
+  \node[mtx, minimum width=1.0cm] (n1) at ($(r3.east)+(1.4,0)$) {Wait};
+  \node[seg, minimum width=2.4cm, draw=black!40, text=black!50] (n2)
+    at (n1.east) {\code{SPI\_Write}\ldots};
+  % llaves
+  \draw[decorate, decoration={brace, amplitude=4pt}, semithick]
+    (w1.north west) ++(0,0.08) -- ($(w3.north east)+(0,0.08)$)
+    node[midway, above=4pt, font=\scriptsize] {\code{escribirPic}: \code{mdlOutputs}};
+  \draw[decorate, decoration={brace, amplitude=4pt}, semithick]
+    (r1.north west) ++(0,0.08) -- ($(r3.north east)+(0,0.08)$)
+    node[midway, above=4pt, font=\scriptsize] {\code{leerPic}: \code{mdlOutputs}};
+  \node[font=\scriptsize, above=6pt] at ($(n1.north)!0.5!(n2.north)$) {paso $k+1$};
+  % notas
+  \node[note, below=0.55cm] at (w1.south) {libre:\\regresa de inmediato};
+  \node[note, below=0.55cm] at (r1.south) {libre:\\regresa de inmediato};
+\end{tikzpicture}
+\caption{Un paso de simulación con los bloques anteriores. Los dos bloques se
+  ejecutan uno tras otro en el mismo hilo; cada \code{Wait} encuentra el mutex
+  libre.}
+\label{fig:hilo}
+\end{figure}
+
+\subsection{Qué hacía realmente}
+
+El mutex sólo evitaba que dos hilos usaran el FT2232H al mismo tiempo, algo que
+en este modelo no ocurre. Podría ser útil si los bloques se ejecutaran en
+hilos distintos, por ejemplo en un modelo con varias tareas concurrentes, pero
+no es el caso de \code{MergedPic.slx}. No interviene en ninguna de las fallas
+de la sección~\ref{sec:causas}: con o sin mutex, la PC hacía las mismas dos
+transacciones en el mismo orden.
+
+% ===========================================================================
+\section{Las causas reales del bloqueo}
+\label{sec:causas}
+
+El bloqueo venía del firmware anterior del dsPIC (\code{dsPicController}), que
+podía quedarse detenido o dejar de recibir, y de la forma en que la PC usaba el
+bus. La tabla~\ref{tab:causas} reúne las causas.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lYY@{}}
+\toprule
+Dónde & Problema & Efecto \\
+\midrule
+Firmware & \textbf{Espera activa.} La escritura en SPI1 esperaba mientras la
+  FIFO de transmisión estuviera llena, condición que sólo cambia cuando la PC
+  genera reloj. & El lazo principal se detenía y no atendía la recepción. \\
+\addlinespace
+Firmware & \textbf{Desbordamiento sin recuperación.} Con la FIFO de recepción
+  llena se activa \code{SPIROV}, y el driver generado por MCC no limpiaba la
+  bandera. & SPI1 dejaba de recibir para siempre: el bloqueo permanente. \\
+\addlinespace
+Firmware & \textbf{Respuesta sin sincronía.} El esclavo escribía la posición
+  en la FIFO cada vez que había espacio, sin relación con el momento en que la
+  PC leía. & Datos desfasados y desalineados. \\
+\addlinespace
+Firmware & \textbf{Sin delimitación de tramas.} No usaba \code{CS}; sólo
+  buscaba \code{0xAA}, valor que puede aparecer dentro de los datos. & Tramas
+  mal interpretadas. \\
+\addlinespace
+PC & \textbf{Bus full-duplex usado como half-duplex.} \code{SPI\_Write} y
+  \code{SPI\_Read} por separado. Al escribir se descartaba lo que llegaba por
+  MISO; al leer, el dsPIC tomaba los bytes de relleno como datos. & Dos
+  transacciones por paso que se corrompían entre sí y llenaban la FIFO del
+  dsPIC. \\
+\addlinespace
+PC & \textbf{\code{escribirPic} no reenviaba un valor repetido.} & Si una
+  escritura se perdía, con una entrada constante el error era permanente. \\
+\addlinespace
+PC & \textbf{Al terminar se enviaba \code{0x0000}.} & $-2.5$\,V en lugar de
+  0\,V: el motor quedaba energizado. \\
+\bottomrule
+\end{tabularx}
+\caption{Causas del bloqueo y de las tramas corruptas.}
+\label{tab:causas}
+\end{table}
+
+La combinación de las primeras dos explica el bloqueo. En el firmware
+anterior, el lazo principal escribía los 6 bytes de la respuesta con
+\code{SPI1\_ByteWrite}, que espera mientras \code{SPITBF} indique la FIFO de
+transmisión llena. Durante esa espera nadie leía la FIFO de recepción de 4
+niveles, a la que llegaban los 3 bytes de cada escritura y los 12 de relleno de
+cada lectura de la PC. Al llenarse se activaba \code{SPIROV} y, como ninguna
+parte del código lo borraba, SPI1 ya no recibía nada más. Ninguno de estos
+pasos depende del mutex.
+
+En la primera prueba en Windows (sección~\ref{sec:resultados}) apareció otra
+causa, ajena al firmware: en esa PC libMPSSE numeró la interfaz~B del FT2232H
+como canal~0. Los bloques abrían el canal~0, así que hablaban por la interfaz
+que no está cableada al dsPIC y sólo leían \code{0xFF}. Los bloques nuevos
+buscan la interfaz por la que responde el dsPIC (sección~\ref{sec:bloques}),
+de modo que ya no dependen de esa numeración.
+
+% ===========================================================================
+\section{El protocolo nuevo}
+\label{sec:protocolo}
+
+Cada paso de simulación hace una sola transferencia full-duplex de 8 bytes con
+\code{SPI\_ReadWrite}, con \code{CS} en bajo durante toda la trama. Mientras la
+PC envía el voltaje por MOSI, el dsPIC devuelve la posición por MISO en los
+mismos ocho bytes de reloj. El formato está definido en un solo archivo,
+\code{protocolo/daq\_protocolo.h}, que comparten el firmware y la PC
+(tabla~\ref{tab:trama}).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}cYY@{}}
+\toprule
+Byte & PC $\to$ dsPIC (MOSI) & dsPIC $\to$ PC (MISO) \\
+\midrule
+0 & Encabezado \code{0xA5} & Encabezado \code{0x5A} \\
+1 & Número de secuencia & Eco de la secuencia de la última trama válida \\
+2 & Código del DAC, byte alto & Posición del encoder, \code{int32} \\
+3 & Código del DAC, byte bajo & little-endian (bytes 2 a 5) \\
+4 & Banderas: bit~0 salida habilitada, bit~1 reinicio del encoder & \\
+5 & Reservado (0) & \\
+6 & Reservado (0) & Status: errores de CRC, encabezado, longitud y
+  vigilancia; causa de reinicio en los 4 bits altos \\
+7 & CRC-8 de los bytes 0 a 6 & CRC-8 de los bytes 0 a 6 \\
+\bottomrule
+\end{tabularx}
+\caption{Formato de la trama de 8 bytes.}
+\label{tab:trama}
+\end{table}
+
+Qué resuelve cada parte:
+
+\begin{itemize}
+\item \textbf{Una transferencia por paso.} Ya no hay una escritura y una
+  lectura separadas que se estorben: cada byte que entra al dsPIC es parte de
+  una trama válida y cada byte que sale es parte de la respuesta.
+\item \textbf{\code{CS} delimita la trama.} El dsPIC sabe dónde empieza y
+  termina sin buscar un valor especial en los datos.
+\item \textbf{Secuencia y CRC-8} (polinomio \code{0x07}, CRC-8/SMBUS). La PC
+  detecta tramas dañadas, perdidas o repetidas, y las cuenta como errores.
+\item \textbf{El voltaje se envía en cada paso}, aunque no cambie, de modo que
+  una trama dañada sólo afecta un periodo.
+\item \textbf{Bandera de salida habilitada.} Con ella en 0, el dsPIC lleva el
+  DAC a 0\,V (código 32767). Al terminar la simulación se envía una trama así,
+  en lugar de $-2.5$\,V.
+\item \textbf{Status.} El dsPIC informa sus propios errores y, una vez después
+  de cada arranque, la causa del reinicio (encendido, MCLR, \emph{watchdog} o
+  tipo de trampa).
+\end{itemize}
+
+La respuesta de la transferencia $k$ se arma al terminar la $k-1$, por lo que
+la posición llega con un paso de retraso. Sumado al paso en que se aplica el
+voltaje, el retardo total del lazo es de dos periodos de muestreo.
+
+% ===========================================================================
+\section{El firmware del dsPIC: \code{dsPicDaq}}
+\label{sec:firmware}
+
+El firmware nuevo ya no tiene esperas activas sobre el SPI y recupera el
+desbordamiento en cada trama, que eran las dos causas del bloqueo. El proyecto
+está en \code{MPLAB/dsPicDaq.X} y la imagen compilada en
+\code{MPLAB/dsPicDaq.hex}.
+
+\begin{itemize}
+\item \textbf{DMA en lugar de espera activa.} SPI1 trabaja como esclavo en
+  modo de buffer estándar. DMA0 recibe y DMA1 transmite durante la
+  transferencia, sin intervención del lazo principal. La FIFO del modo mejorado
+  no se usa: tiene 4 niveles de 8 bits, menos que una trama.
+\item \textbf{Fin de trama por \code{CS}.} \code{CS} (RB10) se asigna con PPS a
+  \code{SS1} y a \code{INT1}. En el flanco de subida, la interrupción valida la
+  trama, reinicia SPI1 (vacía los buffers y borra \code{SPIROV}), muestrea el
+  QEI, arma la respuesta siguiente y reprograma el DMA. Aunque una trama llegue
+  incompleta o dañada, la siguiente empieza con el módulo limpio.
+\item \textbf{DAC.} El lazo principal sólo escribe al DAC8554 cuando el valor
+  cambia.
+\item \textbf{Vigilancia.} Timer1: si pasan 50\,ms sin una trama válida, el DAC
+  va a 0\,V y se reporta en el status. Si Simulink se detiene, el motor no se
+  queda con el último voltaje.
+\item \textbf{Reloj.} El PLL eleva la frecuencia de instrucción de 4\,MHz a
+  $F_{cy} = 50$\,MHz. Con 4\,MHz, la interrupción de fin de trama tardaba cerca
+  de 100\us{} y el esclavo no alcanzaba a presentar a tiempo el primer bit de
+  cada byte a 1\,MHz.
+\item \textbf{Causa de reinicio.} \code{reinicio.c} guarda el código de una
+  trampa en RAM persistente antes del reinicio, y el dsPIC lo reporta en la
+  primera respuesta después de arrancar.
+\item \textbf{Medición.} LED0 (RD10) queda en alto durante la interrupción,
+  para medir su duración con un analizador lógico.
+\end{itemize}
+
+El firmware se compila con \code{-O1} para acortar la interrupción de fin de
+trama, que fija el intervalo mínimo entre tramas. En Linux se compila sin MPLAB
+X con \code{MPLAB/dsPicDaq.X/compilar.sh}.
+
+% ===========================================================================
+\section{Los bloques nuevos de Simulink}
+\label{sec:bloques}
+
+Hay tres juegos de bloques en \code{SIMULINK/DaqPic}, y en todos un solo bloque
+usa el FT2232H, una vez por paso. Por eso ya no hace falta el mutex. Se
+compilan todos con \code{compilar.m} (tabla~\ref{tab:bloques}).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lYY@{}}
+\toprule
+Juego & Bloques & Uso \\
+\midrule
+Un bloque & \code{daqPic}: entra el voltaje; salen posición, errores y
+  atrasos & Modelos nuevos \\
+\addlinespace
+Tres bloques & \code{daqPicInicio} (llave), \code{daqPicEscribir} (llave,
+  voltaje), \code{daqPicLeer} (posición, errores, atrasos) & Modelos que
+  separan inicialización, escritura y lectura \\
+\addlinespace
+Nombres anteriores & \code{initializePic}, \code{escribirPic},
+  \code{leerPic}, con los mismos puertos y en el mismo orden & Usar
+  \code{MergedPic.slx}, \code{ReadPicModificado.slx} y
+  \code{WritePicModificado.slx} sin modificarlos \\
+\bottomrule
+\end{tabularx}
+\caption{Bloques nuevos.}
+\label{tab:bloques}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.7cm and 0.9cm]
+  % ---------------- Antes ----------------
+  \node[box] (ai) {\code{initializePic}\\[-1pt]\scriptsize abre el canal 0,\\[-2pt]
+    \scriptsize crea el mutex};
+  \node[box, below left=1.0cm and -0.9cm of ai] (aw)
+    {\code{escribirPic}\\[-1pt]\scriptsize mutex +\\[-2pt]
+     \scriptsize \code{SPI\_Write} 3\,B};
+  \node[box, below right=1.0cm and -0.9cm of ai] (ar)
+    {\code{leerPic}\\[-1pt]\scriptsize mutex +\\[-2pt]
+     \scriptsize \code{SPI\_Read} 12\,B};
+  \node[shade, below=2.9cm of ai] (af) {FT2232H};
+  \draw[sig] (ai) -- node[font=\scriptsize, left, pos=0.4] {llave} (aw);
+  \draw[sig] (ai) -- node[font=\scriptsize, right, pos=0.4] {llave} (ar);
+  \draw[sig] (aw) -- node[font=\scriptsize, left] {1} (af);
+  \draw[sig] (ar) -- node[font=\scriptsize, right] {2} (af);
+  \node[note, below=0.25cm of af] (an) {dos transacciones por paso};
+  \node[panel, fit=(ai)(aw)(ar)(af)(an), label={[font=\footnotesize\bfseries]
+    above:Antes: bloques anteriores}] (pa) {};
+
+  % ---------------- Ahora ----------------
+  \begin{scope}[xshift=8.2cm]
+  \node[box] (nw) {\code{escribirPic}\\[-1pt]\scriptsize deja el voltaje\\[-2pt]
+    \scriptsize en memoria};
+  \node[box, fill=black!12, below=1.0cm of nw, minimum width=3.4cm] (ni)
+    {\code{initializePic}\\[-1pt]\scriptsize una \code{SPI\_ReadWrite} de 8\,B\\[-2pt]
+     \scriptsize en \code{mdlUpdate}, sin mutex};
+  \node[box, right=1.3cm of ni] (nr) {\code{leerPic}\\[-1pt]\scriptsize lee la\\[-2pt]
+    \scriptsize posición};
+  \node[shade, below=1.0cm of ni] (nf) {FT2232H};
+  \draw[sig] (nw) -- node[font=\scriptsize, left] {voltaje} (ni);
+  \draw[sig] (ni) -- node[font=\scriptsize, above] {posición} (nr);
+  \draw[sig, <->] (ni) -- node[font=\scriptsize, left] {1} (nf);
+  \node[note, below=0.25cm of nf] (nn) {una transferencia por paso};
+  \node[panel, fit=(nw)(ni)(nr)(nf)(nn), label={[font=\footnotesize\bfseries]
+    above:Ahora: bloques nuevos}] (pn) {};
+  \end{scope}
+\end{tikzpicture}
+\caption{Operaciones sobre el FT2232H en cada paso, con los bloques anteriores
+  y con los nuevos de los mismos nombres. En los nuevos, \code{escribirPic} y
+  \code{leerPic} sólo leen y escriben memoria; \code{initializePic} es el único
+  que usa el bus, así que no queda nada que proteger con un mutex.}
+\label{fig:antes-ahora}
+\end{figure}
+
+Cómo trabajan los de tres bloques:
+
+\begin{itemize}
+\item \code{escribirPic} y \code{leerPic} ya no usan el bus. \code{escribirPic}
+  deja el voltaje en la memoria compartida y \code{leerPic} lee la última
+  posición recibida.
+\item \code{initializePic} hace la única transferencia del paso, en su
+  \code{mdlUpdate}. Simulink calcula las salidas de todos los bloques antes de
+  cualquier actualización, así que el voltaje del paso ya está escrito y el
+  orden entre bloques no importa.
+\item La llave sigue siendo la dirección del estado compartido, ahora como
+  \code{double}. Antes de usarla, cada bloque comprueba con
+  \code{VirtualQuery} que la dirección sea válida y que el estado tenga una
+  marca conocida. Una señal equivocada produce un mensaje de error en lugar de
+  cerrar MATLAB.
+\end{itemize}
+
+Otros cambios respecto a los bloques anteriores:
+
+\begin{itemize}
+\item \textbf{Búsqueda de la interfaz.} Se prueba primero el canal cuyo
+  número de serie termina en \code{A} y después los demás, con tramas que
+  dejan la salida en 0\,V y no tocan el encoder; se usa el primero por el que
+  el dsPIC responde con una trama válida (\code{protocolo/daq\_canal.h}).
+  Funciona aunque libMPSSE numere las interfaces en otro orden y aunque el
+  dsPIC se cablee a la interfaz~B. Si no responde por ninguna, el mensaje de
+  error indica qué se leyó en cada una, por ejemplo ``interfaz A: solo 0xFF;
+  interfaz B: solo 0xFF''.
+\item \textbf{Verificación al arrancar.} El bloque pone en cero el encoder y
+  comprueba que el dsPIC responda con el protocolo nuevo. Si no, detiene la
+  simulación con un mensaje claro.
+\item \textbf{Tiempo real.} Cada paso espera al reloj de la PC
+  (\code{QueryPerformanceCounter}) y cuenta como atraso el que llega más de un
+  periodo tarde.
+\item \textbf{Errores con \code{ssSetErrorStatus}} en lugar de
+  \code{mexErrMsgTxt}, y \code{mdlTerminate} tolera que Simulink lo llame sin
+  haber llamado antes a \code{mdlStart}.
+\item \textbf{Al terminar}, una trama con la salida deshabilitada (0\,V) y, en
+  \code{initializePic}, un resumen en la ventana de comandos con pasos,
+  errores y atrasos.
+\end{itemize}
+
+Para que MATLAB use los bloques nuevos y no los anteriores, la simulación se
+ejecuta con \code{SIMULINK/DaqPic} como carpeta actual. El paquete para la
+carpeta del asesor lo arma \code{herramientas/\allowbreak asesor/\allowbreak empaquetar.py}.
+
+% ===========================================================================
+\section{Herramientas de prueba sin Simulink}
+
+Para separar las fallas del enlace de las de Simulink, el enlace se probó
+primero sin MATLAB. Las herramientas están en \code{herramientas/} y comparten
+el núcleo de la prueba (\code{herramientas/\allowbreak comun/\allowbreak enlace\_prueba.h}).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lY@{}}
+\toprule
+Herramienta & Qué hace \\
+\midrule
+\code{protocolo/prueba\_protocolo.c} & Pruebas del formato de trama y del
+  CRC, sin hardware, con un modelo del esclavo que reproduce el retraso de una
+  trama. \\
+\addlinespace
+\code{prueba\_enlace} & Envía tramas al dsPIC y cuenta errores de encabezado,
+  CRC y secuencia, los que reporta el dsPIC y la duración de cada
+  transferencia. Compila en Windows con libMPSSE (\code{compilar.bat}) y en
+  Linux con libftdi1. Con \code{-lazo} une MOSI y MISO dentro del FT2232H para
+  probar la PC sin el dsPIC. \\
+\addlinespace
+\code{reporte/reporte.py} & Genera un PDF a partir del registro CSV de una
+  prueba: errores, histograma de duraciones y mapa de bits erróneos. \\
+\addlinespace
+\code{visor\_enlace} & Interfaz gráfica en tiempo real que ejecuta el mismo
+  lazo que un modelo de Simulink con \code{daqPic} (lazo abierto o PID), con
+  osciloscopio, contadores y la tabla de tramas con error. Tiene un modo
+  simulado sin hardware. \\
+\addlinespace
+\code{arnes\_simulink} & Ejecuta las S-Functions reales en Linux, sin MATLAB,
+  llamándolas en el orden de Simulink contra la tarjeta. Revisa puertos,
+  periodos, llaves inválidas, errores y la liberación del estado. \\
+\addlinespace
+\code{bateria\_pruebas.sh} & Ejecuta en secuencia el lazo interno y el dsPIC,
+  lo más rápido posible y a 1\,kHz, y genera los reportes. \\
+\bottomrule
+\end{tabularx}
+\caption{Herramientas de prueba.}
+\label{tab:herramientas}
+\end{table}
+
+En Linux, la EEPROM del FT2232H está reprogramada con el identificador
+\code{2099:0001}, y \code{herramientas/prueba\_enlace/70-daq-spi.rules} da
+acceso al dispositivo sin \code{sudo}. El procedimiento completo está en
+\code{PRUEBAS.md}.
+
+% ===========================================================================
+\section{Resultados}
+\label{sec:resultados}
+
+Con el firmware nuevo, el PLL y el cable de GND entre las tarjetas, el enlace
+transmitió 100\,000 tramas sin errores, tanto a 1\,kHz como lo más rápido
+posible. En Windows, \code{MergedPic.slx} se ejecutó sin modificaciones y sin
+errores. Cada prueba está en \code{resultados/<fecha>}, con su registro CSV y
+su reporte en PDF (tabla~\ref{tab:resultados}).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lYY@{}}
+\toprule
+Fecha & Prueba & Resultado \\
+\midrule
+2026-10-07 & Windows 10, MATLAB R2025b: \code{MergedPic.slx} sin
+  modificaciones con los bloques nuevos, 10\,001 pasos a 1\,kHz & 0 errores,
+  1 atraso \\
+\addlinespace
+2026-10-07 & Windows: \code{DaqPicPrueba} y \code{DaqPicBloquesPrueba} con el
+  modelo abierto en el editor & 4 a 10 errores por vigilancia: Simulink se
+  detuvo cada 0.25\,s y algunas pausas pasaron de 50\,ms \\
+\addlinespace
+2026-10-06 & Rampa de $\pm1$\,V, 10\,000 tramas a 1\,kHz & 0 errores en el
+  enlace; el DAC no respondió porque DIN y SYNC estaban en terminales
+  equivocadas \\
+\addlinespace
+2026-10-06 & Con el cable de GND: 100\,000 tramas a 1\,kHz y 100\,000 a
+  7408 tramas/s & 0 errores \\
+\addlinespace
+2026-10-06 & Sin cable de GND, ambas tarjetas en el mismo concentrador USB &
+  0.025\,\% de las transferencias con error \\
+\addlinespace
+2026-10-05 & Con PLL, sin cable de GND, cada tarjeta en un puerto USB
+  distinto & 0.7\,\% con error, por pulsos falsos en \code{CS} \\
+\addlinespace
+2026-10-05 & Sin PLL ($F_{cy} = 4$\,MHz), 100\,000 tramas a 1\,kHz & 83\,670
+  errores de CRC: el dsPIC no alcanzaba a presentar el primer bit de cada
+  byte \\
+\bottomrule
+\end{tabularx}
+\caption{Resultados de las pruebas, de la más reciente a la más antigua.}
+\label{tab:resultados}
+\end{table}
+
+El resultado de \code{MergedPic.slx} es el que responde a la pregunta en la
+práctica: el mismo modelo, con los mismos tres bloques y en el mismo Windows,
+dejó de fallar al cambiar el firmware y el uso del bus, no al quitar el mutex.
+
+Dos hallazgos de estas pruebas no tienen que ver con el software:
+
+\begin{itemize}
+\item \textbf{El cable de GND entre la Curiosity Nano y la tarjeta del FT2232H
+  es necesario.} Sin él aparecen pulsos falsos en \code{CS}, y el dsPIC rearma
+  la respuesta a mitad de la trama.
+\item \textbf{El cableado del DAC8554 estaba mal.} DIN estaba en RB7 en lugar
+  de RB2 (SDO2) y SYNC en una terminal vecina de RB4. Por eso, en las pruebas
+  con la salida habilitada, el motor no se movió y la posición se quedó en 0.
+\end{itemize}
+
+% ===========================================================================
+\section{Pendientes}
+
+El enlace y los bloques ya funcionan en Windows; falta la salida analógica y
+el motor.
+
+\begin{enumerate}
+\item Corregir el cableado del DAC8554 (DIN a RB2, SYNC a RB4) y medir
+  \code{VOUTA} con \code{prueba\_enlace -voltaje}.
+\item Probar con el motor conectado: primero en lazo abierto y después con el
+  PID de \code{crear\_modelo\_pid.m}.
+\item Comprobar en la interfaz gráfica de Simulink, no sólo con
+  \code{matlab -batch}, si hay pausas de más de 50\,ms con el modelo abierto.
+\item Ejecutar \code{MergedPic.slx} en la PC del laboratorio con el paquete de
+  \code{herramientas/asesor}.
+\end{enumerate}
+
+\end{document}

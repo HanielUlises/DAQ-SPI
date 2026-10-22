@@ -114,8 +114,29 @@ prueba_enlace.exe -n 10000 -salida
 
 Durante unos 10 s se envía una rampa triangular de ±1 V con periodo de 2000
 tramas. En el osciloscopio, sobre `VOUTA` (terminal 1 del DAC8554), debe
-observarse una señal triangular simétrica alrededor del nivel que corresponde a
-0 V. Al terminar, la salida regresa a ese nivel.
+observarse una señal triangular simétrica entre 0.75 y 1.75 V, alrededor de
+1.25 V, el nivel que corresponde a 0 V. Al terminar, la salida regresa a ese
+nivel.
+
+Con multímetro, `-voltaje V` mantiene la salida fija mientras corre la prueba
+(al terminar, o tras 50 ms sin tramas, regresa a 0 V). `VOUTA` debe ser
+`(V + 2.5) / 2`:
+
+```
+prueba_enlace.exe -n 60000 -periodo 1000 -voltaje -2
+```
+
+| Voltaje | `VOUTA` (terminal 1) |
+|---|---|
+| −2.5 V | 0 V |
+| −2 V | 0.25 V |
+| 0 V (también sin prueba en curso) | 1.25 V |
+| 1 V | 1.75 V |
+| 2.5 V | 2.5 V |
+
+Si `VOUTA` marca 0 V aun sin prueba en curso, el DAC no está alimentado:
+AVDD, IOVDD y VREFH (terminales 4, 12 y 3) deben marcar 3.3 V. Si marca
+1.65 V, la tarjeta tiene un firmware anterior a la escala de 3.3 V.
 
 ## 4. Simulink
 

@@ -233,14 +233,16 @@ static void prueba_voltaje(void)
 {
     const double nan = 0.0 / 0.0;
 
+    /* VOUTA = (V + 2.5) / 2 con VREFH = 3.3 V */
     VERIFICA(daq_voltaje_a_dac(-2.5) == 0u);
-    VERIFICA(daq_voltaje_a_dac(0.0) == DAQ_DAC_CERO);
-    VERIFICA(daq_voltaje_a_dac(2.5) == 65535u);
-    VERIFICA(daq_voltaje_a_dac(1.0) == 45874u);
+    VERIFICA(daq_voltaje_a_dac(-2.0) == 4964u);     /* 0.25 V */
+    VERIFICA(daq_voltaje_a_dac(0.0) == DAQ_DAC_CERO); /* 1.25 V */
+    VERIFICA(daq_voltaje_a_dac(1.0) == 34753u);     /* 1.75 V */
+    VERIFICA(daq_voltaje_a_dac(2.5) == 49648u);     /* 2.5 V */
 
     /* Saturación y NaN */
     VERIFICA(daq_voltaje_a_dac(-10.0) == 0u);
-    VERIFICA(daq_voltaje_a_dac(10.0) == 65535u);
+    VERIFICA(daq_voltaje_a_dac(10.0) == 49648u);
     VERIFICA(daq_voltaje_a_dac(nan) == DAQ_DAC_CERO);
 }
 

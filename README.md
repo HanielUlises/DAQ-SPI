@@ -3,7 +3,7 @@
 Tarjeta de adquisición de datos de bajo costo, funcionalmente equivalente a
 una tarjeta tipo Quanser, basada en el microcontrolador dsPIC33CK64MC105
 (Curiosity Nano). El sistema se controla en tiempo real desde Simulink mediante
-un puente USB–SPI FT2232H y ofrece una salida analógica de ±2.5 V y la lectura
+un puente USB–SPI FT2232H y ofrece una salida analógica de ±2.5 V (de 0 a 2.5 V en el DAC) y la lectura
 de un encoder en cuadratura.
 
 ## Arquitectura
@@ -35,6 +35,14 @@ sobre un adaptador a DIP PA0017C de Proto-Advantage (SSOP-16, paso de 0.65 mm). 
 a través de SPI2, que es un enlace unidireccional: sólo se utilizan las líneas
 de reloj (`SCLK`), datos (`DIN`) y sincronía (`SYNC`).
 
+El DAC se alimenta de la terminal VTG (3.3 V) de la Curiosity Nano, que es
+también su referencia: AVDD, IOVDD y VREFH (terminales 4, 12 y 3) van a VTG,
+y VREFL y GND (terminales 5 y 6) a GND. El intervalo de ±2.5 V se lleva a
+`VOUTA = (V + 2.5) / 2`, de 0 a 2.5 V, con 1.25 V para 0 V
+(`protocolo/daq_protocolo.h`). Sin esa alimentación, el DAC queda alimentado
+a medias a través de la entrada `SYNC` (que el dsPIC mantiene en alto), no
+acepta escrituras y `VOUTA` permanece en 0 V.
+
 Cada actualización consiste en una trama de 24 bits enmarcada por `SYNC` en
 nivel bajo: un byte de control seguido del código de 16 bits recibido desde la
 PC. El byte de control `0x10` selecciona la dirección 0 (`A1 = A0 = 0`), el
@@ -52,9 +60,10 @@ salida utilizada es `VOUTA`. Los canales B, C y D no se emplean.
 | SCK2 | RB0 | | pin 10 |
 | SDO2 | RB2 | | pin 11 |
 | SYNC (GPIO) | RB4 | | pin 9 |
+| VTG (3.3 V) | VTG | | pins 3, 4 y 12 |
 | QEI A / B | RB8 / RB9 | | |
 | LED0 | RD10 | | |
-| GND | GND | GND | GND |
+| GND | GND | GND | pins 5 y 6 |
 
 El cable de GND entre la Curiosity Nano (terminal GND junto a RB10) y la
 tarjeta del FT2232H es necesario. Sin él, la única referencia común de las

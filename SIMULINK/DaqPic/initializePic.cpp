@@ -12,6 +12,6 @@
  *
  * Compilación: compilar.m
  */
-#define S_FUNCTION_NAME  initializePic
+#define S_FUNCTION_NAME  initializePic  
 #define DAQ_INTERFAZ_ANTERIOR
 #include "daqPicInicio.cpp"

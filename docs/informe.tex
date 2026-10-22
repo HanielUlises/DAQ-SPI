@@ -209,9 +209,10 @@ SS1 / INT1 & RB10 & AD3 (\code{CS}) & \\
 SCK2 & RB0 & & terminal 10 (SCLK) \\
 SDO2 & RB2 & & terminal 11 (DIN) \\
 SYNC (GPIO) & RB4 & & terminal 9 (SYNC) \\
+VTG (3.3\,V) & VTG & & terminales 3, 4 y 12 \\
 QEI A / B & RB8 / RB9 & & \\
 LED0 & RD10 & & \\
-GND & GND (junto a RB10) & GND & terminal 6 (GND) \\
+GND & GND (junto a RB10) & GND & terminales 5 y 6 \\
 \bottomrule
 \end{tabular}
 \caption{Conexiones del sistema.}
@@ -222,7 +223,7 @@ La figura~\ref{fig:conexiones} muestra las mismas conexiones junto con las
 del encoder y la salida hacia el motor. El encoder se conecta al dsPIC, no al
 DAC: sus canales A y B entran al QEI por RB8 y RB9, y la posición viaja a la
 PC en la respuesta de cada trama. La salida \code{VOUTA} del DAC8554 entrega
-$\pm2.5$\,V con muy poca corriente, por lo que el motor de 14\,V requiere una
+de 0 a 2.5\,V (1.25\,V para 0\,V) con muy poca corriente, por lo que el motor de 14\,V requiere una
 etapa de potencia entre ambos, aún pendiente. Los colores de los cables del
 encoder corresponden a la asignación usual de los encoders de cinco hilos de
 Pittman y deben confirmarse con un multímetro antes de conectarlos: con
@@ -288,7 +289,7 @@ habilita resistencias de \emph{pull-up} en esas terminales.
   % ---- Salida al motor ----
   \node[pend, minimum width=2.6cm] (pot) at (13.3,-5.6) {Etapa de potencia\\[-1pt]\scriptsize pendiente};
   \node[pend, minimum width=2.6cm, solid] (mot) at (13.3,-6.9) {Motor Pittman\\[-1pt]\scriptsize GM8724S017-R1, 14\,V};
-  \draw[sig] (13.3,-4.45) -- node[right, font=\scriptsize] {$\pm2.5$\,V} (pot.north);
+  \draw[sig] (13.3,-4.45) -- node[right, font=\scriptsize] {0--2.5\,V} (pot.north);
   \draw[sig, dashed] (pot.south) -- (mot.north);
   \draw[semithick, dashed] (mot.west) -- node[cab] {eje} (9.3,-6.9);
 \end{tikzpicture}}
@@ -391,9 +392,10 @@ Byte & \multicolumn{2}{l|}{PC $\to$ dsPIC (MOSI)} & \multicolumn{2}{l}{dsPIC $\t
 \label{tab:trama}
 \end{table}
 
-El valor del DAC se obtiene como $\text{código} = 13107\,(V + 2.5)$, con
-saturación a $\pm2.5$\,V; un valor no numérico se lleva a 0\,V. El código
-32\,767 corresponde a 0\,V. El byte \code{flags} habilita la salida
+El valor del DAC se obtiene como $\text{código} = (65\,536/6.6)\,(V + 2.5)$,
+con saturación a $\pm2.5$\,V; un valor no numérico se lleva a 0\,V. Con la
+referencia de 3.3\,V del DAC, la salida es $V_{\text{OUTA}} = (V + 2.5)/2$ y
+el código 24\,824 corresponde a 0\,V (1.25\,V). El byte \code{flags} habilita la salida
 analógica (bit~0; con cero el DAC se lleva a 0\,V) y ordena poner en cero el
 contador del encoder (bit~1). El byte \code{status} se describe en la
 tabla~\ref{tab:status}; los cuatro bits altos se agregaron durante este
@@ -1121,10 +1123,12 @@ El DAC8554 sólo produce voltajes positivos:
 V_{\text{OUTA}} = V_{\text{REFL}} + \frac{\text{código}}{65536}\,
                   \left(V_{\text{REFH}} - V_{\text{REFL}}\right).
 \end{equation*}
-La escala del protocolo (13\,107 códigos por volt) corresponde a un intervalo
-de 5\,V; con $V_{\text{REFL}} = 0$ y $V_{\text{REFH}} = 5$\,V, el ``0\,V''
-del protocolo son 2.5\,V reales en la terminal~1 y la rampa de $\pm1$\,V
-debe observarse entre 1.5 y 3.5\,V, con periodo de 2\,s. La
+El DAC se alimenta de la terminal VTG (3.3\,V) de la Curiosity Nano, que es
+también su referencia: $V_{\text{REFL}} = 0$ y $V_{\text{REFH}} = 3.3$\,V.
+La escala del protocolo lleva el intervalo de $\pm2.5$\,V a
+$V_{\text{OUTA}} = (V + 2.5)/2$, de 0 a 2.5\,V: el ``0\,V'' del protocolo
+son 1.25\,V reales en la terminal~1, $-2$\,V son 0.25\,V y la rampa de
+$\pm1$\,V debe observarse entre 0.75 y 1.75\,V, con periodo de 2\,s. La
 tabla~\ref{tab:dac} indica las terminales del adaptador PA0017C, que
 conserva la numeración del circuito.
 
@@ -1137,9 +1141,9 @@ Term. & Nombre & Conexión & Term. & Nombre & Conexión \\
 \midrule
 1 & VOUTA & etapa de potencia & 16 & LDAC & GND \\
 2 & VOUTB & sin uso & 15 & ENABLE & GND \\
-3 & VREFH & 5\,V & 14 & A1 & GND \\
-4 & AVDD & alimentación & 13 & A0 & GND \\
-5 & VREFL & GND & 12 & IOVDD & alimentación \\
+3 & VREFH & VTG (3.3\,V) & 14 & A1 & GND \\
+4 & AVDD & VTG (3.3\,V) & 13 & A0 & GND \\
+5 & VREFL & GND & 12 & IOVDD & VTG (3.3\,V) \\
 6 & GND & GND & 11 & DIN & RB2 \\
 7 & VOUTC & sin uso & 10 & SCLK & RB0 \\
 8 & VOUTD & sin uso & 9 & SYNC & RB4 \\
@@ -1160,7 +1164,7 @@ consideran los puntos siguientes:
 \begin{itemize}
 \item \textbf{Etapa de potencia.} El DAC no puede alimentar el motor. Se
   requiere un amplificador con entrada analógica que reste el nivel de
-  2.5\,V y entregue una tensión bipolar de hasta $\pm14$\,V con la corriente
+  1.25\,V y entregue una tensión bipolar de hasta $\pm14$\,V con la corriente
   del motor; un puente H con entrada PWM no es adecuado sin una etapa
   adicional. La etapa de potencia aparece como ``por confirmar'' en la
   arquitectura y debe identificarse.
@@ -1180,7 +1184,7 @@ consideran los puntos siguientes:
 \begin{enumerate}
 \item Observar \code{VOUTA} con osciloscopio durante la rampa del paso~3.
 \item Identificar la etapa de potencia del motor y verificar que compense el
-  nivel de 2.5\,V antes de conectar el motor.
+  nivel de 1.25\,V antes de conectar el motor.
 \item Confirmar la distribución del conector del encoder y los niveles
   admisibles en RB8 y RB9; probar el encoder girando el eje a mano con el
   visor.

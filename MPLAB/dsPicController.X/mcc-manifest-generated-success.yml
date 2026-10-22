@@ -26,7 +26,7 @@ modules:
 - {name: '@mchp-mcc/pic24-dspic33-clock-sib', type: MELODY, version: 1.4.6}
 - {name: '@mchp-mcc/pic24-dspic33-dmt-upb', type: MELODY, version: 1.1.4}
 - {name: '@mchp-mcc/pic24-dspic33-interrupt', type: MELODY, version: 1.4.3}
-- {name: '@mchp-mcc/pic24-dspic33-pin-manager', type: MELODY, version: 1.4.1}
+- {name: '@mchp-mcc/pic24-dspic33-pin-manager', type: MELODY, version: 1.4.1}j
 - {name: '@mchp-mcc/pic24-dspic33-qei-32b-upb', type: MELODY, version: 1.4.6}
 - {name: '@mchp-mcc/pic24-dspic33-reset', type: MELODY, version: 1.1.3}
 - {name: '@mchp-mcc/pic24-dspic33-spi-i2s-upb', type: MELODY, version: 1.4.3}

@@ -2,25 +2,36 @@
 """
 Arma el paquete para el asesor a partir de su carpeta "Archivos Finales"
 (los modelos MergedPic.slx, ReadPicModificado.slx y WritePicModificado.slx
-con sus S-Functions), sin cambiar sus modelos ni renombrar nada:
+con sus S-Functions), con la misma estructura (DRIVER FTDI, MPLAB, SIMULINK)
+y sin cambiar sus modelos ni renombrar nada:
 
   - copia ORIGEN en DESTINO (ORIGEN no se modifica);
   - en cada carpeta de SIMULINK/ cuyo modelo use initializePic, escribirPic o
-    leerPic, mueve los .cpp y .mexw64 anteriores de esos bloques a
-    anteriores/ y deja en su lugar:
-      * los .cpp autónomos, generados desde SIMULINK/DaqPic con
-        daq_bloques.h, daq_protocolo.h y daq_canal.h incluidos, que compilan
-        en esa carpeta con "mex initializePic.cpp libmpsse.lib", etc.;
+    leerPic, mueve los .cpp y .mexw64 anteriores de esos bloques y su
+    ftdi_compartido.h a anteriores/ y deja en su lugar:
+      * los .cpp y ftdi_compartido.h de SIMULINK/Asesor (los del asesor,
+        adaptados a la trama del firmware dsPicDaq) con daq_protocolo.h y
+        daq_canal.h junto a ellos, que compilan en esa carpeta con
+        "mex initializePic.cpp libmpsse.lib -lfixedpoint", etc.;
       * los .mexw64 de --mex, si se da (compilados para Windows);
       * abrir_modelo.m y compilar_bloques.m (herramientas/asesor);
       * "Abrir <modelo>.bat", que abre MATLAB con esa carpeta como carpeta
         actual y el modelo abierto;
-  - pone otro "Abrir <modelo>.bat" en la raíz del paquete, el firmware en
-    FIRMWARE/, su proyecto de MPLAB X en MPLAB/dsPicDaq.X (con
-    protocolo/daq_protocolo.h, que incluye como ../../protocolo) y un
-    LEEME.txt.
+  - agrega el proyecto de MPLAB X del firmware nuevo, MPLAB/dsPicDaq.X, junto
+    a los anteriores: autónomo (daq_protocolo.h dentro del proyecto, para que
+    compile donde se copie) y con MPLAB/dsPicDaq.hex en dist/default/
+    production, donde lo deja MPLAB X;
+  - escribe un LEEME.txt.
 
-Uso: empaquetar.py ORIGEN DESTINO [--mex CARPETA_CON_MEXW64]
+Con --completo agrega además, como los paquetes anteriores, otro "Abrir
+<modelo>.bat" en la raíz, el firmware en FIRMWARE/ y el resto del proyecto
+con la estructura del repositorio: el protocolo, el código fuente de los
+bloques (SIMULINK/Asesor y SIMULINK/DaqPic), las herramientas de prueba, los
+documentos y los resultados.
+
+Del repositorio sólo se copian los archivos versionados (sin build/ ni dist/).
+
+Uso: empaquetar.py ORIGEN DESTINO [--mex CARPETA_CON_MEXW64] [--completo]
 """
 import argparse
 import os
@@ -31,25 +42,27 @@ import sys
 import zipfile
 
 RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-DAQPIC = os.path.join(RAIZ, 'SIMULINK', 'DaqPic')
 ASESOR = os.path.dirname(os.path.abspath(__file__))
 
+# Bloques del asesor adaptados al firmware nuevo y lo que comparten; en el
+# paquete los encabezados del protocolo quedan junto a los .cpp
 BLOQUES = ['initializePic', 'escribirPic', 'leerPic']
-ARGUMENTOS_MEX = {'initializePic': 'initializePic.cpp libmpsse.lib',
-                  'escribirPic': 'escribirPic.cpp', 'leerPic': 'leerPic.cpp'}
-
-# Encabezados del proyecto que se incluyen dentro de cada .cpp autónomo
-LOCALES = {
-    'daq_bloques.h': os.path.join(DAQPIC, 'daq_bloques.h'),
-    '../../protocolo/daq_protocolo.h': os.path.join(RAIZ, 'protocolo', 'daq_protocolo.h'),
-    '../../protocolo/daq_canal.h': os.path.join(RAIZ, 'protocolo', 'daq_canal.h'),
-    'daqPicInicio.cpp': os.path.join(DAQPIC, 'daqPicInicio.cpp'),
-    'daqPicEscribir.cpp': os.path.join(DAQPIC, 'daqPicEscribir.cpp'),
-    'daqPicLeer.cpp': os.path.join(DAQPIC, 'daqPicLeer.cpp'),
+BLOQUES_ASESOR = os.path.join(RAIZ, 'SIMULINK', 'Asesor')
+COMPARTIDOS = {
+    'ftdi_compartido.h': os.path.join(BLOQUES_ASESOR, 'ftdi_compartido.h'),
+    'daq_protocolo.h': os.path.join(RAIZ, 'protocolo', 'daq_protocolo.h'),
+    'daq_canal.h': os.path.join(RAIZ, 'protocolo', 'daq_canal.h'),
 }
+RUTA_PROTOCOLO = b'../../protocolo/'
 
-# Proyecto del firmware: sólo los archivos versionados (sin build/ ni dist/)
-PROYECTO_FIRMWARE = ['MPLAB/dsPicDaq.X', 'protocolo/daq_protocolo.h']
+# Proyecto de MPLAB X del firmware nuevo, sin compilar.sh (sólo Linux); el
+# protocolo se copia dentro del proyecto
+FIRMWARE_X = 'MPLAB/dsPicDaq.X'
+HEX = os.path.join(RAIZ, 'MPLAB', 'dsPicDaq.hex')
+
+# Con --completo: resto del proyecto y firmware en FIRMWARE/
+PROYECTO = ['protocolo', 'SIMULINK/Asesor', 'SIMULINK/DaqPic', 'herramientas', 'docs',
+            'resultados', 'README.md', 'PRUEBAS.md']
 
 FIRMWARE = {
     'dsPicDaq.hex': os.path.join(RAIZ, 'MPLAB', 'dsPicDaq.hex'),
@@ -106,11 +119,12 @@ mismos, sin cambios; sólo cambian los bloques que usan:
 
 {modelos}
 Los bloques anteriores de cada carpeta quedaron en su subcarpeta anteriores/.
-
+El firmware nuevo es el proyecto MPLAB/dsPicDaq.X; los demás proyectos de
+MPLAB/ son los anteriores, sin cambios.
+{contenido}
 Cómo abrir un modelo
 --------------------
-Doble clic en "Abrir MergedPic.bat" (o en el del modelo que se quiera), en
-esta carpeta o dentro de la carpeta del modelo. Abre MATLAB con la carpeta
+Doble clic en "Abrir <modelo>.bat"{donde}. Abre MATLAB con la carpeta
 del modelo como carpeta actual, verifica que los bloques sean los de esa
 carpeta (si no lo son o no cargan con esa versión de MATLAB, los compila) y
 abre el modelo. Después: Run.
@@ -118,7 +132,7 @@ abre el modelo. Después: Run.
 La carpeta puede moverse a cualquier lugar; hay que conservar su estructura.
 
 Sin el .bat: en MATLAB, cambiar la carpeta actual a la del modelo y ejecutar
-    abrir_modelo('MergedPic')
+    abrir_modelo('WritePicModificado')
 
 Para recompilar los bloques (requiere mex -setup C++), en la carpeta del
 modelo:
@@ -130,65 +144,86 @@ Qué hacen los bloques
     escribirPic     entradas: 1) voltaje [V] (±2.5 V), 2) llave
     leerPic         entrada: llave     salida: posición del encoder [cuentas]
 
-Sólo initializePic usa el FT2232H: en cada paso hace una sola transferencia
-SPI que envía el voltaje de escribirPic y recibe la posición que entrega
-leerPic, con un retardo de dos periodos. Al terminar la simulación la salida
-queda en 0 V y la ventana de comandos muestra una línea como:
-    initializePic: 10000 pasos de 0.001 s, 0 errores de comunicacion, 0 pasos atrasados
-Ambos contadores deben quedar en 0.
+Son los bloques de siempre: los tres comparten el FT2232H con la llave de
+initializePic (ftdi_compartido.h). Lo que cambia es la trama del firmware
+dsPicDaq: cada transferencia SPI son 8 bytes que llevan el voltaje al dsPIC
+y traen la posición del encoder, con encabezado y CRC. escribirPic y leerPic
+hacen una transferencia por paso; escribirPic envía aunque el voltaje no
+cambie, porque si pasan más de 50 ms sin tramas el dsPIC lleva la salida a
+0 V. initializePic abre la interfaz del FT2232H por la que responde el dsPIC,
+hace que la simulación avance al ritmo del reloj de la PC y, al terminar,
+deja la salida en 0 V y muestra en la ventana de comandos una línea como:
+    initializePic: 3002 tramas, 0 errores de comunicacion
+El contador de errores debe quedar en 0.
 
 Requisitos
 ----------
-1. Firmware dsPicDaq en la Curiosity Nano: copiar FIRMWARE/dsPicDaq.hex a la
-   unidad CURIOSITY. Los bloques nuevos NO funcionan con el firmware
-   anterior (para regresar a él: FIRMWARE/dsPicController_anterior.hex).
+1. Firmware dsPicDaq en la Curiosity Nano, compilado desde MPLAB X (ver
+   "Firmware" abajo). Los bloques nuevos NO funcionan con el firmware
+   anterior.
 2. Driver de FTDI instalado (carpeta DRIVER FTDI).
 3. Cable de GND entre la Curiosity Nano y la tarjeta del FT2232H.
-4. El modelo debe usar un solver de paso fijo (los incluidos usan 0.001 s).
+4. El modelo debe usar un solver de paso fijo menor que 0.05 s (los
+   incluidos usan 0.001 s y 0.02 s).
 {mex}
-Código del firmware
--------------------
-MPLAB/dsPicDaq.X es el proyecto de MPLAB X de FIRMWARE/dsPicDaq.hex
-(dsPIC33CK64MC105, XC16 o XC-DSC, pack dsPIC33CK-MC_DFP). Incluye
-../../protocolo/daq_protocolo.h, así que debe quedar junto a la carpeta
-protocolo/ de este paquete. En MPLAB X: File > Open Project > dsPicDaq.X y
-"Make and Program Device" con la Curiosity Nano conectada.
+Firmware
+--------
+MPLAB/dsPicDaq.X es el proyecto de MPLAB X del firmware nuevo, junto a los
+proyectos anteriores. Se compila igual que ellos (dsPIC33CK64MC105, XC16
+v2.10 o XC-DSC, pack dsPIC33CK-MC_DFP) y es autónomo: trae dentro
+daq_protocolo.h, el formato de la trama que comparte con los bloques.
+
+Para compilarlo y cargarlo:
+  1. MPLAB X: File > Open Project > MPLAB/dsPicDaq.X.
+  2. Conectar la Curiosity Nano por USB.
+  3. "Make and Program Device" (o Clean and Build y después programar).
 
 No regenerar con MCC (botón Generate): config_bits.c está modificado a mano
 para cambiar al PLL y reinicio.c sustituye el manejo de trampas de MCC.
+
+Para regresar al firmware anterior, abrir MPLAB/dsPicController.X y hacer
+lo mismo.
+
+Sin MPLAB X, la Curiosity Nano también se programa copiando el .hex ya
+compilado a la unidad CURIOSITY que aparece al conectarla:
+    nuevo:    {hex}
+    anterior: {hex_anterior}
+'''
+
+# Sección "Contenido" del LEEME con --completo
+CONTENIDO_COMPLETO = '''
+Contenido
+---------
+    Abrir <modelo>.bat     abre el modelo con sus bloques (ver abajo)
+    SIMULINK/              los modelos de siempre, con los bloques nuevos
+    SIMULINK/Asesor/       código fuente de initializePic, escribirPic y
+                           leerPic: los del asesor, adaptados a la trama nueva
+    SIMULINK/DaqPic/       bloques daqPic (un bloque) y daqPicInicio/Escribir/
+                           Leer (tres bloques); compilar.m los compila
+    MPLAB/dsPicDaq.X/      proyecto de MPLAB X del firmware nuevo
+    MPLAB/dsPic*.X         proyectos anteriores, sin cambios
+    FIRMWARE/              dsPicDaq.hex y el firmware anterior
+    protocolo/             formato de la trama, compartido por el firmware y
+                           la PC, y su prueba sin hardware
+    herramientas/          pruebas del enlace sin MATLAB (prueba_enlace, con
+                           .exe para Windows; visor_enlace; arnes_simulink;
+                           reporte) y el armado de este paquete (asesor/)
+    docs/                  propuesta, informe, arquitectura y reporte del
+                           mutex, en PDF y con su fuente en LaTeX
+    resultados/            registros y reportes de las pruebas
+    README.md, PRUEBAS.md  descripción del proyecto y procedimiento de pruebas
+    DRIVER FTDI/           driver D2XX de FTDI
 '''
 
 
-def expandir(ruta, vistos):
-    salida = []
-    with open(ruta, encoding='utf-8') as f:
-        for linea in f:
-            m = re.match(r'\s*#include\s+"([^"]+)"', linea)
-            if m and m.group(1) in LOCALES:
-                dep = LOCALES[m.group(1)]
-                if dep not in vistos:
-                    vistos.add(dep)
-                    salida.append(f'/* ---- inicio de {m.group(1)} ---- */\n')
-                    salida.append(expandir(dep, vistos))
-                    salida.append(f'/* ---- fin de {m.group(1)} ---- */\n')
-            else:
-                salida.append(linea)
-    return ''.join(salida)
-
-
-def cpp_autonomo(bloque):
-    encabezado = (
-        '/*\n'
-        f' * Archivo autónomo generado por herramientas/asesor/empaquetar.py a partir de\n'
-        f' * SIMULINK/DaqPic/{bloque}.cpp del repositorio DAQ-SPI, con daq_bloques.h,\n'
-        ' * daq_protocolo.h y daq_canal.h incluidos. Compila en la carpeta del modelo:\n'
-        ' *\n'
-        f' *     mex {ARGUMENTOS_MEX[bloque]}\n'
-        ' *\n'
-        ' * Requiere ftd2xx.h, libmpsse_spi.h y libmpsse.lib en la misma carpeta.\n'
-        ' * No editar: los cambios van en SIMULINK/DaqPic.\n'
-        ' */\n')
-    return encabezado + expandir(os.path.join(DAQPIC, bloque + '.cpp'), set())
+def copiar_sin_ruta(origen, destino):
+    """Copia un archivo del repositorio con los includes de ../../protocolo/
+    cambiados a la misma carpeta, donde queda la copia del protocolo"""
+    with open(origen, 'rb') as f:
+        datos = f.read().replace(RUTA_PROTOCOLO, b'')
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    with open(destino, 'wb') as f:
+        f.write(datos)
 
 
 def bloques_del_modelo(slx):
@@ -207,11 +242,32 @@ def escribir(ruta, texto, crlf=True):
         f.write(texto)
 
 
+def versionados(rutas):
+    """Archivos versionados del repositorio bajo rutas (sin build/ ni dist/)"""
+    salida = subprocess.run(['git', '-C', RAIZ, 'ls-files', '-z', '--', *rutas],
+                            check=True, capture_output=True).stdout.decode()
+    return [r for r in salida.split('\0') if r]
+
+
+def copiar_firmware(destino):
+    """MPLAB/dsPicDaq.X autónomo, con daq_protocolo.h dentro y el .hex en dist/"""
+    proyecto = os.path.join(destino, *FIRMWARE_X.split('/'))
+    for rel in versionados([FIRMWARE_X]):
+        if not rel.endswith('/compilar.sh'):
+            copiar_sin_ruta(os.path.join(RAIZ, rel), os.path.join(destino, *rel.split('/')))
+    shutil.copy2(os.path.join(RAIZ, 'protocolo', 'daq_protocolo.h'), proyecto)
+    produccion = os.path.join(proyecto, 'dist', 'default', 'production')
+    os.makedirs(produccion)
+    shutil.copy2(HEX, os.path.join(produccion, 'dsPicDaq.X.production.hex'))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     p.add_argument('origen', help='carpeta "Archivos Finales" del asesor')
     p.add_argument('destino', help='carpeta nueva del paquete (no debe existir)')
     p.add_argument('--mex', help='carpeta con initializePic.mexw64, escribirPic.mexw64 y leerPic.mexw64')
+    p.add_argument('--completo', action='store_true',
+                   help='agrega el resto del proyecto, FIRMWARE/ y los .bat en la raíz')
     a = p.parse_args()
 
     if os.path.exists(a.destino):
@@ -224,7 +280,6 @@ def main():
                 sys.exit(f'Falta {b}.mexw64 en {a.mex}.')
 
     shutil.copytree(a.origen, a.destino)
-    fuentes = {b: cpp_autonomo(b) for b in BLOQUES}
     modelos = []
     simulink = os.path.join(a.destino, 'SIMULINK')
     for carpeta in sorted(os.listdir(simulink)):
@@ -237,32 +292,46 @@ def main():
             continue
         anteriores = os.path.join(c, 'anteriores')
         os.makedirs(anteriores, exist_ok=True)
+        anteriores_bloques = [b + ext for b in usados for ext in ('.cpp', '.mexw64')]
+        for nombre in anteriores_bloques + ['ftdi_compartido.h']:
+            viejo = os.path.join(c, nombre)
+            if os.path.exists(viejo):
+                shutil.move(viejo, os.path.join(anteriores, nombre))
         for b in usados:
-            for ext in ('.cpp', '.mexw64'):
-                viejo = os.path.join(c, b + ext)
-                if os.path.exists(viejo):
-                    shutil.move(viejo, os.path.join(anteriores, b + ext))
-            escribir(os.path.join(c, b + '.cpp'), fuentes[b])
+            copiar_sin_ruta(os.path.join(BLOQUES_ASESOR, b + '.cpp'), os.path.join(c, b + '.cpp'))
             if a.mex:
                 shutil.copy2(os.path.join(a.mex, b + '.mexw64'), c)
+        for nombre, ruta in COMPARTIDOS.items():
+            copiar_sin_ruta(ruta, os.path.join(c, nombre))
         for m in ('abrir_modelo.m', 'compilar_bloques.m'):
             shutil.copy2(os.path.join(ASESOR, m), c)
         escribir(os.path.join(c, f'Abrir {carpeta}.bat'), BAT.format(modelo=carpeta, carpeta=r'%~dp0'))
-        escribir(os.path.join(a.destino, f'Abrir {carpeta}.bat'),
-                 BAT.format(modelo=carpeta, carpeta=r'%~dp0SIMULINK\%MODELO%'))
+        if a.completo:
+            escribir(os.path.join(a.destino, f'Abrir {carpeta}.bat'),
+                     BAT.format(modelo=carpeta, carpeta=r'%~dp0SIMULINK\%MODELO%'))
         modelos.append((carpeta, usados))
         print(f'{carpeta}: {", ".join(usados)}')
 
-    os.makedirs(os.path.join(a.destino, 'FIRMWARE'), exist_ok=True)
-    for nombre, ruta in FIRMWARE.items():
-        shutil.copy2(ruta, os.path.join(a.destino, 'FIRMWARE', nombre))
+    copiar_firmware(a.destino)
 
-    archivos = subprocess.run(['git', '-C', RAIZ, 'ls-files', '-z', '--', *PROYECTO_FIRMWARE],
-                              check=True, capture_output=True).stdout.decode().split('\0')
-    for rel in filter(None, archivos):
-        destino = os.path.join(a.destino, *rel.split('/'))
-        os.makedirs(os.path.dirname(destino), exist_ok=True)
-        shutil.copy2(os.path.join(RAIZ, rel), destino)
+    if a.completo:
+        os.makedirs(os.path.join(a.destino, 'FIRMWARE'), exist_ok=True)
+        for nombre, ruta in FIRMWARE.items():
+            shutil.copy2(ruta, os.path.join(a.destino, 'FIRMWARE', nombre))
+        for rel in versionados(PROYECTO):
+            destino = os.path.join(a.destino, *rel.split('/'))
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            shutil.copy2(os.path.join(RAIZ, rel), destino)
+        textos = dict(contenido=CONTENIDO_COMPLETO,
+                      donde=', en esta carpeta o dentro\nde la carpeta del modelo',
+                      hex='FIRMWARE/dsPicDaq.hex',
+                      hex_anterior='FIRMWARE/dsPicController_anterior.hex')
+    else:
+        textos = dict(contenido='',
+                      donde=', dentro de la carpeta del modelo\n(por ejemplo SIMULINK/WritePicModificado)',
+                      hex='MPLAB/dsPicDaq.X/dist/default/production/dsPicDaq.X.production.hex',
+                      hex_anterior='MPLAB/dsPicController.X/dist/default/production/'
+                                   'dsPicController.X.production.hex')
 
     lista = ''.join(f'    SIMULINK/{m}/{m}.slx   {", ".join(u)}\n' for m, u in modelos)
     mex = ('5. Los .mexw64 vienen compilados para Windows de 64 bits. Si no cargan\n'
@@ -270,7 +339,7 @@ def main():
            '   mex -setup C++).\n' if a.mex else
            '5. Los .mexw64 no vienen compilados: el .bat los compila la primera vez\n'
            '   (requiere mex -setup C++).\n')
-    escribir(os.path.join(a.destino, 'LEEME.txt'), LEEME.format(modelos=lista, mex=mex))
+    escribir(os.path.join(a.destino, 'LEEME.txt'), LEEME.format(modelos=lista, mex=mex, **textos))
     print(f'Listo: {a.destino}')
 
 

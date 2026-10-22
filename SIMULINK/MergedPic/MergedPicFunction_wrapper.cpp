@@ -30,7 +30,7 @@
 #define APP_CHECK_STATUS(exp) {if (exp!=FT_OK){printf(" status(0x%x) != FT_OK\n", exp);}else{;}};
 
 FT_HANDLE ftHandle;
-int Started = 0;
+int Started = 0; 
 
 int primer_ciclo = 1;
 int32_t offset_encoder = 0;
@@ -101,7 +101,7 @@ FT_STATUS status;
 }
 /*
  * Output function
- *
+ * MergedPic sin consideraciones de mas que el buffer, pues el mutex no tenia problema
  */
 extern "C" void MergedPicFunction_Outputs_wrapper(const real_T *u0);
 
@@ -121,7 +121,7 @@ if (Started == 1)
     //WRITE PIC    
     double voltaje = u0[0];
         if (voltaje > 2.5) {
-            voltaje = 2.5; // L�mite m�ximo
+            voltaje = 2.5; // Limite maximo
         }else if (voltaje < -2.5){
             voltaje = -2.5; //Limite minimo
         }

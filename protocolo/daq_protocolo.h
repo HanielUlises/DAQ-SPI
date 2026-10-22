@@ -68,10 +68,17 @@
 #define DAQ_REINICIO_TRAMPA_OTRA    14u
 #define DAQ_REINICIO_DESCONOCIDO    15u
 
-/* Conversión de voltaje: valor = 13107 (V + 2.5), intervalo [-2.5, 2.5] V */
-#define DAQ_DAC_CERO            32767u  /* 0 V */
-#define DAQ_DAC_ESCALA          13107.0
+/* Conversión de voltaje. El intervalo [-2.5, 2.5] V se lleva a 0..2.5 V en
+ * VOUTA: VOUTA = (V + 2.5) / 2, de modo que 0 V son 1.25 V. El DAC8554 se
+ * alimenta de VTG (3.3 V) de la Curiosity Nano, que es también su
+ * referencia (VOUTA = 3.3 valor / 65536), así que
+ * valor = (65536 / 6.6) (V + 2.5): 0 para -2.5 V, 24824 para 0 V y 49648
+ * para 2.5 V. */
+#define DAQ_VREF                3.3     /* VREFH - VREFL del DAC8554, V */
 #define DAQ_V_MAX               2.5
+#define DAQ_VOUT_MAX            2.5     /* VOUTA con DAQ_V_MAX, V */
+#define DAQ_DAC_ESCALA          (65536.0 * DAQ_VOUT_MAX / (2.0 * DAQ_V_MAX * DAQ_VREF))
+#define DAQ_DAC_CERO            24824u  /* 0 V */
 
 /* CRC-8, polinomio 0x07, valor inicial 0x00, sin reflexión (CRC-8/SMBUS).
  * Valor de verificación: daq_crc8("123456789", 9) = 0xF4.

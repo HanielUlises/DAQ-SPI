@@ -29,8 +29,6 @@ uint8_t parteAlta = 0;
 uint8_t parteBaja = 0;
 uint16_t valorDac = 0;
 
-
-
 int main(void)
 {
     SYSTEM_Initialize();
@@ -62,6 +60,7 @@ void lecturaEncoder()
             SPI1_ByteWrite(datosEncoder.bytes[3]);
         }
 }
+
 void escrituraDac()
 {
     IO_SYNC_SetHigh();
